@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🔍 Détection de Fraude Bancaire — Projet ML
 
 > Pipeline complet de Machine Learning pour la détection de transactions frauduleuses,
@@ -192,3 +193,7 @@ Détection de fraude bancaire | Python, XGBoost, SHAP, Streamlit          2024
 ## Auteur
 
 Projet réalisé dans le cadre d'un portfolio ML personnel.
+=======
+# bank-fraud-detection
+ML pipeline for fraud detection with XGBoost, SHAP, and SMOTE — 0.98 AUC-ROC.
+>>>>>>> cf7aceceb6747eddca74ba3b1314958530b63025
