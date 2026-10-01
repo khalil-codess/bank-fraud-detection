@@ -17,6 +17,45 @@ Streamlit dashboard.
 Each dataset has a loader and a feature function in `src/fraud/datasets/`, and a config in
 `configs/`. Everything else (splitting, cross-validation, cost model, dashboard) is shared.
 
+## Results: `sparkov` dataset (baseline, no card history yet)
+
+Chronological split of 1.85M transactions: train → validation → **test = the last 90 days
+(277,859 transactions, 924 frauds worth 483,346 USD)**. The features describe a single
+transaction only (amount, time of day, weekday, customer age and gender, city size,
+home-to-merchant distance, merchant category); card-history features come next.
+
+**Time-series cross-validation (4 folds, mean ± std)**: used to select the model.
+
+| Model               | PR-AUC        | Savings rate     | Recall        | Precision     |
+|---------------------|---------------|------------------|---------------|---------------|
+| Logistic Regression | 0.202 ± 0.025 | 78.1% ± 2.2%     | 0.601 ± 0.023 | 0.121 ± 0.045 |
+| **Random Forest** ✓ | 0.889 ± 0.017 | **96.9% ± 0.4%** | 0.917 ± 0.011 | 0.495 ± 0.060 |
+| XGBoost             | 0.884 ± 0.016 | 96.0% ± 0.7%     | 0.941 ± 0.015 | 0.428 ± 0.087 |
+| XGBoost + SMOTE     | 0.897 ± 0.017 | 96.7% ± 0.3%     | 0.940 ± 0.012 | 0.419 ± 0.063 |
+
+**Held-out test period**
+
+| Model               | PR-AUC | Precision | Recall | Alerts | Net savings | Savings rate |
+|---------------------|--------|-----------|--------|--------|-------------|--------------|
+| Logistic Regression | 0.160  | 0.114     | 0.590  | 4,800  | 386,536     | 80.0%        |
+| **Random Forest** ✓ | 0.855  | 0.427     | 0.891  | 1,929  | 466,185     | 96.4%        |
+| XGBoost             | 0.867  | 0.215     | 0.956  | 4,103  | 460,560     | 95.3%        |
+| XGBoost + SMOTE     | 0.878  | 0.375     | 0.929  | 2,290  | 466,179     | 96.4%        |
+
+- The selected Random Forest raises 1,929 alerts in 90 days (about 21 a day) and catches 823 of
+  924 frauds. The 101 it misses are small: it stops **98.4% of the fraud amount**, and net of
+  review costs it saves **96.4%** of fraud losses.
+- With 924 test frauds the estimates are tight: test PR-AUC 0.855, 95% CI 0.835 – 0.875.
+- **Ranking vs savings.** XGBoost + SMOTE ranks frauds significantly better (paired bootstrap
+  PR-AUC +0.023, 95% CI +0.013 to +0.034), yet saves the same amount at its own best threshold.
+  The model is chosen on savings, where Random Forest and XGBoost + SMOTE are tied.
+- Logistic regression fails here (PR-AUC 0.16): fraud depends on combinations (a large amount
+  *in* certain categories *at* night) that a linear model cannot express.
+- With an analyst capacity of **10 alerts/day**, the top-ranked alerts have precision 0.82 and
+  catch 80% of frauds.
+- SHAP shows what drives the score: amount, night-time hours and the merchant category
+  (`outputs/sparkov/shap_summary.png`).
+
 ## Results: `creditcard` dataset
 
 **How models are evaluated.** The data is split by time: train → validation → test (the last 15%).

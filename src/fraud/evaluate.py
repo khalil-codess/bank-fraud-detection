@@ -98,33 +98,54 @@ def at_k(y_true, proba, k: int) -> dict:
     return {"k": k, "precision": hits / k, "recall": hits / max(int(y_true.sum()), 1), "frauds_caught": hits}
 
 
-def bootstrap_ci(y_true, proba, metric=average_precision_score, n: int = 300, seed: int = 0):
-    """95% bootstrap confidence interval (few frauds -> noisy metrics)."""
-    rng = np.random.default_rng(seed)
-    y_true, proba = np.asarray(y_true), np.asarray(proba)
-    scores = []
-    for _ in range(n):
-        idx = rng.integers(0, len(y_true), len(y_true))
-        if y_true[idx].sum() == 0:
-            continue
-        scores.append(metric(y_true[idx], proba[idx]))
-    return float(np.percentile(scores, 2.5)), float(np.percentile(scores, 97.5))
+class _SortedScores:
+    """Scores sorted once, so average precision can be recomputed for any row weights in O(n).
+
+    A bootstrap resample is equivalent to weighting each row by how many times it was drawn, so
+    resampling never needs to re-sort. Matches sklearn's average_precision_score, ties included.
+    """
+
+    def __init__(self, y_true, proba):
+        order = np.argsort(-np.asarray(proba, dtype=float), kind="stable")
+        self.order = order
+        self.y = np.asarray(y_true, dtype=float)[order]
+        p = np.asarray(proba, dtype=float)[order]
+        self.tie_last = np.r_[p[1:] != p[:-1], True]  # one threshold per distinct score
+
+    def average_precision(self, weights=None) -> float:
+        w = np.ones_like(self.y) if weights is None else np.asarray(weights, dtype=float)[self.order]
+        tp = np.cumsum(w * self.y)[self.tie_last]
+        fp = np.cumsum(w * (1 - self.y))[self.tie_last]
+        if tp[-1] == 0:
+            return float("nan")
+        precision = tp / np.maximum(tp + fp, 1e-12)
+        recall = tp / tp[-1]
+        return float(np.sum(np.diff(np.r_[0.0, recall]) * precision))
 
 
-def paired_bootstrap(y_true, proba_a, proba_b, metric=average_precision_score,
-                     n: int = 1000, seed: int = 0) -> dict:
-    """Is model A better than model B on the same rows? Resamples rows jointly for both models."""
+def _bootstrap_weights(n_rows: int, n: int, seed: int):
+    """Yield row weights for `n` bootstrap resamples (count of each row in the resample)."""
     rng = np.random.default_rng(seed)
-    y_true, proba_a, proba_b = (np.asarray(x) for x in (y_true, proba_a, proba_b))
-    diffs = []
     for _ in range(n):
-        idx = rng.integers(0, len(y_true), len(y_true))
-        if y_true[idx].sum() == 0:
-            continue
-        diffs.append(metric(y_true[idx], proba_a[idx]) - metric(y_true[idx], proba_b[idx]))
-    diffs = np.asarray(diffs)
+        yield np.bincount(rng.integers(0, n_rows, n_rows), minlength=n_rows)
+
+
+def bootstrap_ci(y_true, proba, n: int = 300, seed: int = 0):
+    """95% bootstrap confidence interval of PR-AUC (few frauds -> noisy metrics)."""
+    scores = _SortedScores(y_true, proba)
+    values = [scores.average_precision(w) for w in _bootstrap_weights(len(scores.y), n, seed)]
+    values = np.asarray(values)[~np.isnan(values)]
+    return float(np.percentile(values, 2.5)), float(np.percentile(values, 97.5))
+
+
+def paired_bootstrap(y_true, proba_a, proba_b, n: int = 1000, seed: int = 0) -> dict:
+    """Is model A's PR-AUC better than model B's on the same rows? Both see identical resamples."""
+    a, b = _SortedScores(y_true, proba_a), _SortedScores(y_true, proba_b)
+    diffs = np.asarray([a.average_precision(w) - b.average_precision(w)
+                        for w in _bootstrap_weights(len(a.y), n, seed)])
+    diffs = diffs[~np.isnan(diffs)]
     return {
-        "diff": float(metric(y_true, proba_a) - metric(y_true, proba_b)),
+        "diff": a.average_precision() - b.average_precision(),
         "ci95": (float(np.percentile(diffs, 2.5)), float(np.percentile(diffs, 97.5))),
         "p_a_better": float((diffs > 0).mean()),
     }

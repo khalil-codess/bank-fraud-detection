@@ -89,3 +89,20 @@ def test_paired_bootstrap_detects_a_clearly_better_model():
     assert res["diff"] > 0
     assert res["ci95"][0] > 0
     assert res["p_a_better"] > 0.99
+
+
+@pytest.mark.parametrize("ties", [False, True])
+def test_fast_average_precision_matches_sklearn(ties):
+    from sklearn.metrics import average_precision_score
+
+    from fraud.evaluate import _SortedScores
+
+    rng = np.random.default_rng(1)
+    y = (rng.random(5000) < 0.05).astype(int)
+    p = np.clip(0.3 * y + rng.random(5000), 0, 1)
+    if ties:
+        p = np.round(p, 1)  # many tied scores
+    w = np.bincount(rng.integers(0, 5000, 5000), minlength=5000)
+    scores = _SortedScores(y, p)
+    assert scores.average_precision() == pytest.approx(average_precision_score(y, p))
+    assert scores.average_precision(w) == pytest.approx(average_precision_score(y, p, sample_weight=w))
