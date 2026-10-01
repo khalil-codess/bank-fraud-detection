@@ -166,9 +166,6 @@ Done: leak-free evaluation · package, tests, CI · cost-based evaluation · Spa
 card-history features · tuning, calibration, expected-value rule · reason codes · FastAPI +
 Docker.
 
-Next: MLflow experiment tracking · drift monitoring with a week-by-week replay · an analyst alert
-queue in the dashboard.
-
 ---
 
 Mohamed Khalil Kouki · Joblib model files run code when loaded: only load models you trust.
