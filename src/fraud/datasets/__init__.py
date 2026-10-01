@@ -40,6 +40,8 @@ class DatasetSpec:
     describe: Callable[[str, pd.Series, pd.Series], str] = lambda group, raw, feats: group
     # reason groups based on protected attributes (age, gender): flagged wherever they are shown
     protected_groups: frozenset = frozenset()
+    # raw transaction -> readable {field: value} for the dashboard
+    display: Callable[[pd.Series], dict] = lambda raw: raw.to_dict()
 
 
 def get_dataset(name: str) -> DatasetSpec:

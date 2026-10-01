@@ -48,6 +48,12 @@ def describe(group: str, raw: pd.Series, feats: pd.Series) -> str:
     return f"Anonymised component {group} = {raw[group]:.2f}"
 
 
+def display(raw: pd.Series) -> dict:
+    return {"Time": f"{raw['Time'] / 3600:.1f} h after the first transaction",
+            "Amount": f"{raw['Amount']:,.2f}",
+            "V1–V28": "28 anonymised PCA components (not shown)"}
+
+
 def synthetic(n: int = 3000, fraud_rate: float = 0.03, seed: int = 0) -> pd.DataFrame:
     """Random transactions in this schema; frauds have shifted V1/V2 so a model can learn them."""
     rng = np.random.default_rng(seed)
@@ -70,4 +76,5 @@ SPEC = DatasetSpec(
     synthetic=synthetic,
     reason_groups=REASON_GROUPS,
     describe=describe,
+    display=display,
 )

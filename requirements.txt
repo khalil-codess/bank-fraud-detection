@@ -1,2 +1,3 @@
-# Streamlit Community Cloud installs from this file; the real dependency list is in pyproject.toml.
-.[app]
+# Streamlit Community Cloud installs this file. Exact versions: the committed models are pickled
+# and only load safely with the library versions they were trained with (see requirements-lock.txt).
+-r requirements-lock.txt

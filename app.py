@@ -1,7 +1,11 @@
 """Streamlit dashboard. Run: streamlit run app.py (after python -m fraud.train)."""
 
+import sys
 import tempfile
 from pathlib import Path
+
+# Streamlit Community Cloud runs app.py without installing the package: make src/ importable.
+sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -55,9 +59,9 @@ with tab_demo:
 
         st.markdown("**What-if**")
         tx["Amount"] = st.number_input("Amount", 0.0, 30000.0, float(tx["Amount"].iloc[0]), step=10.0)
-        pca_cols = [c for c in tx.columns if c.startswith("V") and c[1:].isdigit()]  # anonymous, not shown
-        details = tx.drop(columns=pca_cols + ["Class"])
-        st.dataframe(details.T.rename(columns=lambda _: "value").astype(str), width="stretch")
+        details = spec.display(tx.iloc[0])
+        st.dataframe(pd.DataFrame({"Field": list(details), "Value": list(details.values())}),
+                     hide_index=True, width="stretch")
 
     with col_out:
         res = score_transactions(model, policy, tx, spec).iloc[0]
@@ -124,8 +128,8 @@ with tab_perf:
     d = metrics["data"]
     st.markdown(
         f"Evaluated on a **chronological test set** of {d['test']['rows']:,} transactions containing "
-        f"only **{d['test']['frauds']} frauds** (the de-duplicated file has {d['rows_dedup']:,} of "
-        f"{d['rows_raw']:,} rows)."
+        f"only **{d['test']['frauds']} frauds**, the last part of {d['rows_dedup']:,} transactions "
+        f"({d['rows_raw'] - d['rows_dedup']:,} duplicate rows removed)."
     )
     lo, hi = metrics["test_pr_auc_ci95"]
     c = st.columns(5)

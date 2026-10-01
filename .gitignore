@@ -10,4 +10,6 @@ __pycache__/
 data/
 *.pkl
 *.joblib
+# the trained models are small (<4 MB) and committed so the live demo can load them
+!artifacts/*/fraud_model.joblib
 .claude/

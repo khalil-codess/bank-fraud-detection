@@ -17,7 +17,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - name: Install
-        run: pip install -e ".[app,api,dev]"
+        run: |
+          pip install -r requirements-lock.txt   # versions the committed models were trained with
+          pip install -e ".[app,api,dev]"
       - name: Lint
         run: ruff check src tests app.py
       - name: Tests

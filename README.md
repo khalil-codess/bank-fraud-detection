@@ -1,352 +1,170 @@
 # 🔍 Bank Fraud Detection
 
 [![CI](https://github.com/khalil-codess/bank-fraud-detection/actions/workflows/ci.yml/badge.svg)](https://github.com/khalil-codess/bank-fraud-detection/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11%20%7C%203.13-blue)
+![Tests](https://img.shields.io/badge/tests-120%20passing-brightgreen)
 
-Machine-learning pipeline that detects fraudulent card transactions, evaluated the way it would be
-used in production: a chronological split, a decision threshold chosen outside the test set to
-maximise savings, time-series cross-validation, confidence intervals, SHAP explanations and a
-Streamlit dashboard.
+An end-to-end card-fraud detection system, built and evaluated the way a bank would run it:
+models trained on the past and tested on the future, decisions measured in money saved, every
+alert explained in plain language, and a real-time API whose features match training exactly.
 
-## Datasets
+**On the last 90 days of 1.85M card transactions (924 frauds worth 483,346 USD):**
 
-| Name | Source | Size | Why it is here |
-|---|---|---|---|
-| `sparkov` | [Kaggle: kartik2112/fraud-detection](https://www.kaggle.com/datasets/kartik2112/fraud-detection) | 1.85M transactions, 2019–2020 | Card, merchant, category and location fields make behavioural features and readable explanations possible. Simulated data. |
-| `creditcard` | [Kaggle: mlg-ulb/creditcardfraud](https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud) | 284,807 transactions, 2 days (2013) | Classic benchmark. Real data, but anonymised into 28 PCA components. |
+| | |
+|---|---|
+| Fraud money stopped | **99.8%** |
+| Net savings after a 5 USD review cost per alert | **476,033 USD (98.5% of fraud losses)** |
+| Alerts raised | **1,276** in 90 days (~14 a day), **69%** of them real frauds |
+| With 10 reviews a day | top alerts are **95%** frauds and catch **93%** of them |
+| PR-AUC (95% CI) | **0.980** (0.974 – 0.985) |
+| Scoring latency, one transaction with its reasons | **44 ms** median |
 
-Each dataset has a loader and a feature function in `src/fraud/datasets/`, and a config in
-`configs/`. Everything else (splitting, cross-validation, cost model, dashboard) is shared.
+![Dashboard: a real fraud from the test period, flagged with its three reasons](docs/images/dashboard_alert.png)
 
-## Results: `sparkov` dataset
+## What makes it different
 
-Chronological split of 1.85M transactions: train → validation → **test = the last 90 days
-(277,859 transactions, 924 frauds worth 483,346 USD)**.
+- **Honest evaluation.** Chronological train / validation / test split, rolling time-series
+  cross-validation, model and decision rule chosen on validation only, the test period scored
+  once, bootstrap confidence intervals and paired model comparisons.
+- **Card history, without leaking the future.** Velocity, spending in the last 24 h, amount vs
+  the card's usual amount, first visit to a merchant, travel speed between purchases: computed
+  from each card's *earlier* transactions only. Tests prove that a transaction's features are
+  bit-for-bit identical whether or not later data exists. This took PR-AUC from 0.855 to 0.968.
+- **Decisions in money, not accuracy.** Calibrated probabilities make the cost-optimal rule
+  possible: *review when probability × amount ≥ review cost*. A 2,000 USD purchase at 5% risk
+  is reviewed, a 10 USD one at 30% is not.
+- **Every alert explained.** *"Card spent 865.02 USD in the previous 24 h"*, *"Amount is 14.1x
+  this card's average (78.44 USD)"*: SHAP contributions turned into sentences, which add up
+  exactly to the model's score.
+- **Production-ready serving.** A FastAPI service keeps each card's history online, and replaying
+  2,000 real transactions through it gives scores identical to offline batch scoring (difference
+  0.0). Packaged with Docker; CI runs 120 tests on Python 3.11 and 3.13.
+- **Problems documented, not hidden.** Fabricated metrics in the first version were replaced by
+  measured ones, LightGBM's divergence on imbalanced data was diagnosed and fixed, and the model's
+  use of age and gender is flagged in every alert, with the cost of removing them measured
+  ([details](docs/RESULTS.md#protected-attributes-age-and-gender)).
 
-### Card-history features
+## How it works
 
-Real fraud systems look at the card's behaviour, not just the transaction. For every transaction,
-`src/fraud/history.py` summarises **only the card's earlier transactions**: counts in the last
-1 h / 24 h / 7 days, amount spent in the last 24 h, the card's usual amount (mean and spread),
-time since its previous purchase, earlier visits to this merchant and category, and the distance
-and speed from the previous purchase. Model features compare the current transaction with that
-history (e.g. *amount ÷ card's usual amount*).
-
-Two guarantees are enforced by tests (`tests/test_history.py`):
-- **no look-ahead**: a transaction's history is bit-for-bit identical whether later data exists
-  or is altered;
-- **no labels**: fraud labels are never used (in production they arrive weeks later).
-
-### Tuning, calibration and an expected-value decision rule
-
-- **Tuning** (`python -m fraud.tune`): Optuna searches hyper-parameters inside the training
-  window only (fit on its older 80%, score PR-AUC on its most recent 20%), then the winners are
-  copied into `configs/sparkov.yaml`. XGBoost: 0.980 → 0.985 on the tuning holdout, and the gain
-  carried over to cross-validation (0.970 → 0.982). **LightGBM's did not** (0.985 on the tuning
-  holdout, 0.961 in CV): tuning ran on 20% of the legitimate rows for speed, and size-dependent
-  settings (7 samples per leaf) behave differently on the full data. Cross-validation caught it.
-- **A LightGBM pitfall**: with a large class weight, LightGBM's default minimum hessian per leaf
-  (0.001) let leaf values explode on the creditcard data: training stopped after 46 of 400 trees
-  with PR-AUC 0.02. The project now uses XGBoost's default (1.0), with a regression test.
-- **Calibration**: the selected model's scores go through Platt scaling fitted on validation
-  data. It is strictly increasing, so ranking, PR-AUC and SHAP are unchanged, but a score now
-  reads as a probability: raw scores were over-confident in the 45–85% range, calibrated ones
-  follow the diagonal (`outputs/sparkov/calibration.png`).
-- **Decision rule**: with real probabilities, the cost-optimal rule is *review a transaction when
-  probability × amount ≥ review cost*. A 2,000 USD purchase at 5% risk gets reviewed, a 10 USD one
-  at 30% does not. It is compared on validation with a single best threshold, and it wins there
-  (637,234 vs 635,839 USD) and on the test period:
-
-| Decision rule (test period) | Alerts | Precision | Frauds caught | Fraud amount stopped | Net savings |
-|---|---|---|---|---|---|
-| Single score threshold (best on validation) | 1,200 | 0.75 | 901 / 924 | 99.4% | 474,338 USD (98.1%) |
-| **probability × amount ≥ 5 USD** ✓ | 1,276 | 0.69 | 883 / 924 | **99.8%** | **476,033 USD (98.5%)** |
-
-The expected-value rule catches *fewer* frauds but *more money*: it lets through tiny frauds whose
-loss is smaller than the cost of reviewing them, and reviews large purchases even at low risk.
-
-### Progress across steps (selected model, held-out test period)
-
-| | Transaction only | + card history | + tuning, calibration, EV rule |
-|---|---|---|---|
-| Selected model | Random Forest | XGBoost + SMOTE | **XGBoost (calibrated)** |
-| PR-AUC (95% CI) | 0.855 (0.835 – 0.875) | 0.968 (0.959 – 0.974) | **0.980 (0.974 – 0.985)** |
-| Alerts in 90 days | 1,929 | 1,824 | **1,276** |
-| Precision of alerts | 0.43 | 0.50 | **0.69** |
-| Fraud amount stopped | 98.4% | 99.8% | **99.8%** |
-| Net savings | 466,185 USD (96.4%) | 473,172 USD (97.9%) | **476,033 USD (98.5%)** |
-| 10 reviews/day: precision / recall | 0.82 / 0.80 | 0.93 / 0.91 | **0.95 / 0.93** |
-
-From the first to the last column, analysts get a third fewer alerts, and two thirds of them are
-real frauds instead of four in ten.
-
-### Reason codes
-
-Every alert comes with its top three reasons in plain language, built from the transaction's own
-values (`src/fraud/reasons.py`). A real fraud from the test period:
-
-> **Send for review**, fraud probability 100%, expected loss 1,104.39 USD
-> 1. Amount 1,104.51 USD
-> 2. Card spent 865.02 USD in the previous 24 h
-> 3. Amount is 14.1x this card's average (78.44 USD)
-
-SHAP contributions of related features are summed into reason groups (the two time-of-day
-features become "Made at 22:45 (night)", the 14 category columns become "Merchant category:
-groceries (in store)"). Because SHAP is additive, the groups plus the base value equal the
-model's score exactly, and a test checks it. The dashboard shows the reasons for single
-transactions and adds a `reasons` column when scoring a CSV.
-
-### Protected attributes: age and gender
-
-The Sparkov model uses the cardholder's **age and gender**. Reason codes made this visible: one or
-the other is among the top three reasons of **3.4% (age) and 4.3% (gender)** of the 1,276
-alerts in the test period. In the dashboard and in CSV exports these reasons are marked
-*protected attribute*.
-
-Removing both features was measured (tuned XGBoost, best single threshold on validation, test
-period):
-
-| | With age & gender | Without |
-|---|---|---|
-| PR-AUC | 0.980 | 0.966 |
-| Alerts | 1,200 | 1,880 |
-| Precision | 0.75 | 0.48 |
-| Net savings | 474,338 USD (98.1%) | 471,558 USD (97.6%) |
-
-**Decision for this project: keep them, and document it.** This is a portfolio project on
-simulated data, and the Sparkov generator builds its fraud patterns from customer profiles, so
-part of this signal is likely an artifact of the simulator. A real bank could not do this: in
-the EU and the US, age and gender cannot justify treating a customer differently. It would have
-to drop both features and accept about 680 more alerts per 90 days (+57%) for 2,800 USD less
-savings.
-
-### All models (card history, tuned)
-
-**Time-series cross-validation (4 folds, mean ± std)**
-
-| Model               | PR-AUC        | Savings rate     | Recall        | Precision     |
-|---------------------|---------------|------------------|---------------|---------------|
-| Logistic Regression | 0.372 ± 0.055 | 90.9% ± 0.5%     | 0.840 ± 0.045 | 0.208 ± 0.029 |
-| Random Forest       | 0.942 ± 0.016 | 97.3% ± 0.6%     | 0.956 ± 0.018 | 0.564 ± 0.054 |
-| **XGBoost** ✓       | 0.982 ± 0.007 | **98.0% ± 0.3%** | 0.980 ± 0.011 | 0.690 ± 0.078 |
-| LightGBM            | 0.961 ± 0.002 | 96.7% ± 0.5%     | 0.968 ± 0.013 | 0.611 ± 0.104 |
-| XGBoost + SMOTE     | 0.981 ± 0.007 | 97.9% ± 0.4%     | 0.983 ± 0.011 | 0.638 ± 0.111 |
-
-**Held-out test period** (raw scores, each model's best threshold on validation)
-
-| Model               | PR-AUC | Precision | Recall | Alerts | Net savings | Savings rate |
-|---------------------|--------|-----------|--------|--------|-------------|--------------|
-| Logistic Regression | 0.280  | 0.175     | 0.810  | 4,274  | 435,795     | 90.2%        |
-| Random Forest       | 0.924  | 0.510     | 0.952  | 1,726  | 471,159     | 97.5%        |
-| **XGBoost** ✓       | 0.980  | 0.751     | 0.975  | 1,200  | 474,338     | 98.1%        |
-| LightGBM            | 0.930  | 0.422     | 0.979  | 2,143  | 469,698     | 97.2%        |
-| XGBoost + SMOTE     | 0.979  | 0.761     | 0.975  | 1,184  | 476,377     | 98.6%        |
-
-- XGBoost and XGBoost + SMOTE (same trees, different imbalance handling) are tied: paired
-  bootstrap PR-AUC difference +0.000 (95% CI −0.002 to +0.003). XGBoost wins the CV savings and
-  needs no resampling, so it is selected.
-- XGBoost beats LightGBM (+0.050, CI +0.029 to +0.071) and Random Forest (+0.056).
-- Logistic regression can't model the interactions that matter (large amount *and* online
-  category *and* night *and* unusual for this card).
-
-## Real-time scoring API
-
-`src/fraud/api.py` serves the Sparkov model with FastAPI. `POST /score` takes one transaction,
-computes its card-history features from the card's earlier transactions, applies the decision
-rule chosen at training time, returns the reasons, and then records the transaction in the card's
-history.
-
-```bash
-docker compose up --build        # API on :8000 (docs at /docs), dashboard on :8502
+```mermaid
+flowchart LR
+    raw["Kaggle CSV<br/>1.85M transactions"] --> hist["Card history<br/>(earlier transactions only)"]
+    hist --> feat["Features<br/>transaction + card behaviour"]
+    feat --> cv["Time-series CV<br/>5 models, Optuna tuning"]
+    cv --> cal["Calibration +<br/>decision rule (validation)"]
+    cal --> art[("Model + metrics.json")]
+    art --> dash["Streamlit dashboard"]
+    art --> api["FastAPI /score"]
+    tx["New transaction"] --> api
+    api <--> state["Online card state<br/>(same values as training)"]
+    api --> out["review / approve<br/>+ probability + reasons"]
 ```
 
-A new 1,250 USD online purchase at 2 a.m. on a real card from the dataset:
+## Quick start
+
+Everything (API + dashboard) with Docker:
+
+```bash
+docker compose up --build
+# API docs:  http://localhost:8000/docs
+# Dashboard: http://localhost:8502
+```
+
+Or locally, with Python 3.11+:
+
+```bash
+pip install -e ".[app,api,dev]"
+streamlit run app.py                                  # dashboard, uses the committed models
+pytest                                                # 120 tests
+```
+
+To retrain, download the [Sparkov data](https://www.kaggle.com/datasets/kartik2112/fraud-detection)
+(`fraudTrain.csv` and `fraudTest.csv`) into `data/raw/sparkov/`, then:
+
+```bash
+python -m fraud.train --config configs/sparkov.yaml   # ~15 min: CV, 5 models, calibration
+python -m fraud.tune --model XGBoost --trials 40      # optional Optuna search
+python -m fraud.benchmark                             # replay test transactions through the API
+```
+
+No Kaggle account? `python -m fraud.synthetic --dataset sparkov --rows 20000 --out data/synthetic.csv`
+then `python -m fraud.train --data data/synthetic.csv`.
+
+## Scoring API
+
+```bash
+curl -X POST localhost:8000/score -H "Content-Type: application/json" -d '{
+  "card_id": 3517814635263522, "timestamp": "2021-01-02T02:13:00", "amount": 1250.00,
+  "merchant": "Never Seen Ltd", "category": "shopping_net", "gender": "M", "dob": "1941-10-16",
+  "lat": 37.5802, "long": -80.5248, "city_pop": 2443, "merch_lat": 38.1802, "merch_long": -79.8248}'
+```
 
 ```json
 {
-  "transaction_id": "risky-1",
   "decision": "review",
-  "fraud_probability": 0.0087,
-  "expected_loss": 10.92,
+  "fraud_probability": 0.0201,
+  "expected_loss": 25.09,
   "rule": "expected_value",
   "reasons": [
-    {"text": "Amount 1,250.00 USD", "impact": 4.39, "protected": false},
-    {"text": "Amount is 19.7x this card's average (63.56 USD)", "impact": 1.68, "protected": false},
-    {"text": "Made on a Saturday", "impact": 0.11, "protected": false}
+    {"text": "Amount 1,250.00 USD", "impact": 4.42, "protected": false},
+    {"text": "Amount is 19.7x this card's average (63.59 USD)", "impact": 1.72, "protected": false},
+    {"text": "0 other transactions on this card in the previous hour, 0 in 24 h, 29 in 7 days",
+     "impact": 0.22, "protected": false}
   ],
-  "card_transactions_before": 1463
+  "card_transactions_before": 1462
 }
 ```
 
-The probability is under 1%, but 0.87% of 1,250 USD is more than the 5 USD review cost, so
-the expected-value rule sends it for review.
+A real card from the dataset (1,462 earlier transactions, usually 63.59 USD), a new 1,250 USD
+online purchase at 2 a.m. The fraud probability is only 2%, but 2% of 1,250 USD is 25.09 USD,
+more than the 5 USD review cost, so it goes to review. (Response shortened; it also returns latency and model
+version.)
 
-**Training/serving consistency.** Training computes card history for a whole table at once
-(`history.py`). The API keeps a small state per card and updates it one transaction at a time
-(`state.py`). Both use the same running sums in the same order, and tests require them to be
-exactly equal. `python -m fraud.benchmark` warms the state with everything before the test
-period, then replays real test transactions one by one through the service:
+## Documentation
 
-| 2,000 replayed test transactions | |
-|---|---|
-| Difference from offline batch scores | **0.0** (identical probabilities, 100% same decisions) |
-| Latency p50 / p95 / p99 | **44 / 69 / 71 ms** (features + model + SHAP reasons, without HTTP) |
-
-Profiling took this from 106 ms to 44 ms: features are now computed once per request instead of
-three times, the feature frame is built in one go (adding 34 columns one by one cost ~1 ms
-each), and the SHAP explainer is built once and cached. A warm-up at startup keeps the first
-request from paying for the explainer (1.3 s → 53 ms).
-
-**Production notes.**
-- The image pins the exact library versions the model was trained with
-  (`requirements-lock.txt`), because pickled models are only safe with those versions.
-- At startup, card history is rebuilt from `data/raw/sparkov` (999 cards, ~30 s). A real service
-  would persist it in a store such as Redis.
-- Requests are processed one at a time under a lock, so score-then-record never interleaves for
-  a card. Scaling out would need per-card locking in the shared store.
-- A transaction older than the card's latest one is rejected (HTTP 409).
-
-## Results: `creditcard` dataset
-
-**How models are evaluated.** The data is split by time: train → validation → test (the last 15%).
-Models are compared by **rolling time-series cross-validation** (4 folds) using only data from
-before the test period. The decision threshold is set on validation to **maximise net savings**
-under a simple cost model: a missed fraud costs its amount, reviewing an alert costs 5. The test
-set is scored once, at the end.
-
-**Cross-validation (mean ± std over 4 time folds)**: the basis for model selection.
-
-| Model               | PR-AUC        | Savings rate  | Recall        |
-|---------------------|---------------|---------------|---------------|
-| Logistic Regression | 0.756 ± 0.102 | 48.6% ± 17.6% | 0.704 ± 0.172 |
-| Random Forest       | 0.788 ± 0.064 | 51.8% ± 22.6% | 0.777 ± 0.111 |
-| **XGBoost** ✓       | 0.791 ± 0.059 | **57.2% ± 25.2%** | 0.779 ± 0.085 |
-| LightGBM            | 0.396 ± 0.115 | 39.8% ± 12.7% | 0.593 ± 0.107 |
-| XGBoost + SMOTE     | 0.785 ± 0.033 | 47.4% ± 19.5% | 0.728 ± 0.045 |
-
-**Held-out test period** (42,558 transactions, only **52 frauds** worth 6,169 in total):
-
-| Model               | PR-AUC | Precision | Recall | Alerts | Net savings | Savings rate |
-|---------------------|--------|-----------|--------|--------|-------------|--------------|
-| Logistic Regression | 0.694  | 0.639     | 0.750  | 61     | 3,491       | 56.6%        |
-| Random Forest       | 0.770  | 0.830     | 0.750  | 47     | 3,561       | 57.7%        |
-| **XGBoost** ✓       | 0.759  | 0.709     | 0.750  | 55     | 3,521       | 57.1%        |
-| LightGBM            | 0.520  | 0.180     | 0.731  | 211    | 2,690       | 43.6%        |
-| XGBoost + SMOTE     | 0.759  | 0.765     | 0.750  | 51     | 3,541       | 57.4%        |
-
-The selected XGBoost model reviews 55 alerts, catches 39 of 52 frauds and saves **57% of fraud
-losses net of review costs**. The threshold chosen on validation lands at the peak of the test
-savings curve (`outputs/creditcard/savings_curve.png`).
-
-**What the numbers do and don't say**
-
-- The tree models are statistically tied. A paired bootstrap on the test set gives XGBoost vs
-  Random Forest a PR-AUC difference of −0.011 (95% CI −0.028 to +0.003), and the CV standard
-  deviations overlap. Picking either is defensible.
-- Test PR-AUC 0.759 has a 95% CI of 0.64 – 0.86: 52 frauds is a small sample.
-- SMOTE doesn't help. LightGBM, untuned for this small dataset, is the weakest tree model.
-- Calibration helps here (Brier score 0.00111 → 0.00043), but the **expected-value rule loses on
-  validation** (7,735 vs 7,936 saved), so the single threshold is kept: with 55 validation
-  frauds, probabilities are too rough for the amount-weighted rule. The choice is data-driven.
-- If analysts can review only **100 alerts/day**, the model's top 25 alerts in the test period are
-  all frauds (precision 1.00, recall 0.48). With **200/day**, precision 0.78 and recall 0.75.
-
-Everything above is regenerated into `artifacts/creditcard/metrics.json` by each training run.
-
-## Design decisions
-
-| Problem in the first version | Fix |
-|---|---|
-| One scaler fitted twice: `scaler.pkl` only held *Time*, and the app hardcoded *Amount* statistics (train/serving skew) | Deterministic features (`log1p(Amount)`, cyclic hour) and the scaler saved inside a single `Pipeline` |
-| Scaling before the split (leakage) | Scaler fitted on training data only |
-| Random split: the model sees the "future" | **Chronological** train / validation / test split |
-| 1,081 duplicate rows that could land in both train and test | De-duplication |
-| Fixed 0.5 threshold; model chosen and evaluated on the same test set | Threshold that maximises savings on validation; model chosen by time-series CV |
-| ROC-AUC as headline metric (optimistic at 0.17% fraud) | **PR-AUC** and **net savings**, with bootstrap CIs and paired model comparisons |
-| "XGBoost + SMOTE" advertised, but SMOTE only applied to logistic regression | SMOTE tested as a proper ablation: **it does not help here** |
-| Metrics hardcoded in the dashboard | Dashboard reads `artifacts/<dataset>/metrics.json` |
-| Dashboard: sliders on anonymous PCA components, V11–V28 fixed at 0 | Real test transactions, what-if on *Amount*/*Time*, CSV batch scoring |
-| Tests exercised sklearn/imblearn, not the project | Tests of the project's own code, plus an end-to-end training test |
+- [**Detailed results**](docs/RESULTS.md): progress across steps, all models, cross-validation,
+  calibration, decision rules, reason codes, protected attributes, and the classic Kaggle
+  `creditcard` benchmark.
+- [**Engineering notes**](docs/ENGINEERING.md): training/serving consistency, latency profiling,
+  production notes, design decisions, known limitations.
 
 ## Project layout
 
 ```
 src/fraud/
-  datasets/      one module per dataset: loader, features, synthetic generator
-  history.py     point-in-time card history (velocity, usual amount, merchant novelty, travel)
-  config.py      typed access to configs/*.yaml
-  data.py        loading, de-duplication, chronological split
-  models.py      candidate pipelines (LR, RF, XGBoost, LightGBM, XGBoost + SMOTE)
-  evaluate.py    thresholds, cost model, precision@k, bootstrap and paired bootstrap
+  datasets/      one module per dataset: loader, features, reason sentences, synthetic data
+  history.py     point-in-time card history (batch, for training)
+  state.py       the same card history, online, one transaction at a time (API)
+  train.py       training: CV, model selection, calibration, decision rule, artifacts
+  evaluate.py    cost model, thresholds, precision@k, bootstrap tests
   validation.py  rolling time-series cross-validation
-  calibration.py Platt calibration, reliability and calibration error
-  tune.py        Optuna hyper-parameter search inside the training window
+  calibration.py Platt scaling and calibration metrics
+  tune.py        Optuna search inside the training window
   reasons.py     plain-language reason codes from SHAP
-  state.py       online card history (same values as history.py, one transaction at a time)
   api.py         FastAPI scoring service
-  benchmark.py   replay test transactions through the service: latency + consistency
-  inference.py   load artifacts, score and explain transactions
-  plots.py       figures written to outputs/
-  synthetic.py   CLI writing synthetic data in a dataset's file format
-  train.py       training entry point
+  benchmark.py   latency and training/serving consistency check
 app.py           Streamlit dashboard
-Dockerfile, docker-compose.yml, requirements-lock.txt   container setup (API + dashboard)
-configs/         one config per dataset: paths, split, costs, CV, model hyper-parameters
-tests/           pytest suite (unit + end-to-end)
-artifacts/<ds>/  metrics.json, demo_transactions.csv (committed); fraud_model.joblib (generated)
-outputs/<ds>/    generated figures
-archive/         first notebook, kept for reference
+configs/         one YAML per dataset: split, costs, CV, model hyper-parameters
+artifacts/       trained models + metrics.json (committed)
+tests/           120 tests: leakage, exact online/batch parity, API, end-to-end training
 ```
 
-## Getting started
+## Datasets
 
-```bash
-python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
-pip install -e ".[app,api,dev]"
-```
-
-Download the data (see [Datasets](#datasets)): `fraudTrain.csv` and `fraudTest.csv` into
-`data/raw/sparkov/`, and/or `creditcard.csv` into `data/raw/`. Then:
-
-```bash
-python -m fraud.train --config configs/sparkov.yaml      # default config
-python -m fraud.train --config configs/creditcard.yaml   # ~3 min
-# options: --no-cv (faster), --review-cost 10, --threshold-method fbeta, --no-shap
-python -m fraud.tune --config configs/sparkov.yaml --model XGBoost --trials 40   # ~5 min
-pytest --cov                       # tests
-ruff check src tests app.py        # lint
-streamlit run app.py               # dashboard; pick the dataset in the sidebar
-uvicorn fraud.api:app --port 8000  # scoring API (FRAUD_HISTORY=data/raw/sparkov to warm card history)
-python -m fraud.benchmark          # replay test transactions through the API service
-```
-
-No Kaggle account? Try the pipeline on synthetic data:
-
-```bash
-python -m fraud.synthetic --dataset sparkov --rows 20000 --out data/synthetic.csv
-python -m fraud.train --config configs/sparkov.yaml --data data/synthetic.csv
-```
-
-## Known limitations
-
-- `creditcard`: **52 frauds in the test set**, so high uncertainty. Cross-validation helps, but its fold-to-fold
-  spread is itself large (savings rate ± 25%).
-- `creditcard`: V1–V28 are already an anonymised PCA, so business features cannot be built, and
-  the data spans two days, so drift over time cannot be tested.
-- `sparkov` is simulated: fraud patterns are cleaner than in real life, so its scores will look
-  better than a real bank's would.
-- The cost model is deliberately simple: a flat review cost, no chargeback fees, no customer-friction
-  cost of false alarms. Tune `costs.review_cost` in `configs/*.yaml` to your own numbers.
+| Name | Source | Size | Role |
+|---|---|---|---|
+| `sparkov` | [kartik2112/fraud-detection](https://www.kaggle.com/datasets/kartik2112/fraud-detection) | 1.85M transactions, 2019–2020 | Main dataset: card, merchant and location fields allow behavioural features. **Simulated**, so scores are higher than a real bank would see. |
+| `creditcard` | [mlg-ulb/creditcardfraud](https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud) | 284,807 transactions, 2 days | Classic benchmark, real but anonymised into PCA components ([results](docs/RESULTS.md#creditcard-dataset)). |
 
 ## Roadmap
 
-1. ~~Honest, leak-free evaluation~~
-2. ~~Package layout, config, tests, CI~~
-3. ~~Evaluation framework: time-series CV, cost-based threshold, precision@k~~
-4. ~~Multi-dataset support + Sparkov dataset~~
-5. ~~Behavioural features (velocity, card history, geography)~~
-6. ~~LightGBM, Optuna tuning, probability calibration, expected-value decision rule~~
-7. ~~Readable reason codes~~
-8. ~~FastAPI scoring service + Docker~~
-9. MLflow tracking, drift monitoring
+Done: leak-free evaluation · package, tests, CI · cost-based evaluation · Sparkov dataset ·
+card-history features · tuning, calibration, expected-value rule · reason codes · FastAPI +
+Docker.
 
-Joblib model files execute code when loaded: only load models you trained yourself.
+Next: MLflow experiment tracking · drift monitoring with a week-by-week replay · an analyst alert
+queue in the dashboard.
+
+---
+
+Mohamed Khalil Kouki · Joblib model files run code when loaded: only load models you trust.

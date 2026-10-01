@@ -210,6 +210,29 @@ def describe(group: str, raw: pd.Series, feats: pd.Series) -> str:
     return group
 
 
+def display(raw: pd.Series) -> dict:
+    """Readable fields of one transaction (dashboard)."""
+    ts = timestamps(raw["Time"])
+    age = (ts - pd.Timestamp(raw["dob"])).days / 365.25
+    n = int(raw["hist_n"])
+    home_km = haversine_km(raw["lat"], raw["long"], raw["merch_lat"], raw["merch_long"])
+    fields = {
+        "Date": f"{ts:%a %d %b %Y, %H:%M}",
+        "Amount": f"{raw['Amount']:,.2f} USD",
+        "Merchant": str(raw["merchant"]).removeprefix("fraud_"),
+        "Category": CATEGORY_LABELS.get(raw["category"], raw["category"]),
+        "Cardholder": f"{raw['gender']}, {age:.0f} years, city of {int(raw['city_pop']):,}",
+        "Distance from home": f"{home_km:,.0f} km",
+        "Card: earlier transactions": f"{n:,}",
+    }
+    if n:
+        fields["Card: average amount"] = f"{raw['hist_mean']:,.2f} USD"
+        spent, count = raw["hist_amount_24h"], int(raw["hist_n_24h"])
+        fields["Card: spent in previous 24 h"] = f"{spent:,.2f} USD ({count} transactions)"
+        fields["Card: previous transaction"] = f"{_duration(raw['hist_secs_since_prev'])} earlier"
+    return fields
+
+
 def synthetic(n: int = 3000, fraud_rate: float = 0.03, seed: int = 0) -> pd.DataFrame:
     """Transactions in the Sparkov schema. Frauds are larger, at night and in online categories."""
     rng = np.random.default_rng(seed)
@@ -255,4 +278,5 @@ SPEC = DatasetSpec(
     reason_groups=REASON_GROUPS,
     describe=describe,
     protected_groups=frozenset({"cardholder_age", "cardholder_gender"}),
+    display=display,
 )

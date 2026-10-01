@@ -118,3 +118,10 @@ def test_sparkov_never_loads_personal_fields(tmp_path):
     raw["first"], raw["last"], raw["street"] = "Jane", "Doe", "1 Main St"
     raw.to_csv(tmp_path / "tx.csv", index=False)
     assert not {"first", "last", "street"} & set(sparkov.load(tmp_path / "tx.csv").columns)
+
+
+def test_display_is_readable(spec):
+    fields = spec.display(spec.synthetic(300, seed=2).iloc[-1])
+    assert fields and all(isinstance(k, str) and isinstance(v, str) for k, v in fields.items())
+    assert not any(k.startswith("hist_") for k in fields)
+    assert not any(str(v).startswith("fraud_") for v in fields.values())
