@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/khalil-codess/bank-fraud-detection/actions/workflows/ci.yml/badge.svg)](https://github.com/khalil-codess/bank-fraud-detection/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.13-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 ![Tests](https://img.shields.io/badge/tests-120%20passing-brightgreen)
 [![Live demo](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://bank-fraud-detection-z52g4u2mehujkb9ppintqd.streamlit.app/)
 
@@ -168,4 +169,5 @@ Docker.
 
 ---
 
-Mohamed Khalil Kouki · Joblib model files run code when loaded: only load models you trust.
+Mohamed Khalil Kouki · [MIT License](LICENSE) · Joblib model files run code when loaded: only load
+models you trust.
