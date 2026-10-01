@@ -3,10 +3,14 @@
 [![CI](https://github.com/khalil-codess/bank-fraud-detection/actions/workflows/ci.yml/badge.svg)](https://github.com/khalil-codess/bank-fraud-detection/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.13-blue)
 ![Tests](https://img.shields.io/badge/tests-120%20passing-brightgreen)
+[![Live demo](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://bank-fraud-detection-z52g4u2mehujkb9ppintqd.streamlit.app/)
 
 An end-to-end card-fraud detection system, built and evaluated the way a bank would run it:
 models trained on the past and tested on the future, decisions measured in money saved, every
 alert explained in plain language, and a real-time API whose features match training exactly.
+
+**▶ [Try the live demo](https://bank-fraud-detection-z52g4u2mehujkb9ppintqd.streamlit.app/)**: real test-period frauds, their reasons, a what-if on the
+amount, CSV scoring and the full evaluation.
 
 **On the last 90 days of 1.85M card transactions (924 frauds worth 483,346 USD):**
 
@@ -62,7 +66,7 @@ flowchart LR
 
 ## Quick start
 
-Everything (API + dashboard) with Docker:
+No install needed: [live demo](https://bank-fraud-detection-z52g4u2mehujkb9ppintqd.streamlit.app/). To run it yourself, everything (API + dashboard) with Docker:
 
 ```bash
 docker compose up --build
