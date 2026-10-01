@@ -37,16 +37,29 @@ models:
     n_estimators: 100
     min_samples_leaf: 3
     max_samples: 0.3          # each tree sees a 30% bootstrap sample
-  XGBoost:
-    n_estimators: 300
-    learning_rate: 0.05
-    max_depth: 6
-    subsample: 0.8
-    colsample_bytree: 0.8
-  XGBoost + SMOTE:
+  XGBoost:                    # tuned: python -m fraud.tune --model XGBoost (outputs/sparkov/tuning_XGBoost.json)
+    n_estimators: 537
+    learning_rate: 0.0735
+    max_depth: 8
+    min_child_weight: 2.46
+    subsample: 0.992
+    colsample_bytree: 0.609
+    reg_lambda: 0.933
+  LightGBM:                   # tuned: python -m fraud.tune --model LightGBM (outputs/sparkov/tuning_LightGBM.json)
+    n_estimators: 1191
+    learning_rate: 0.0738
+    num_leaves: 47
+    min_child_samples: 7
+    subsample: 0.998
+    subsample_freq: 1
+    colsample_bytree: 0.468
+    reg_lambda: 0.241
+  XGBoost + SMOTE:            # same trees as XGBoost: only the imbalance handling differs
     smote_ratio: 0.1
-    n_estimators: 300
-    learning_rate: 0.05
-    max_depth: 6
-    subsample: 0.8
-    colsample_bytree: 0.8
+    n_estimators: 537
+    learning_rate: 0.0735
+    max_depth: 8
+    min_child_weight: 2.46
+    subsample: 0.992
+    colsample_bytree: 0.609
+    reg_lambda: 0.933

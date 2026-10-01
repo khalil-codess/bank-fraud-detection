@@ -6,6 +6,8 @@ from fraud.evaluate import evaluate
 from fraud.inference import explain, score_transactions
 from fraud.models import build_models
 
+AT_HALF = {"rule": "threshold", "threshold": 0.5}
+
 
 @pytest.fixture(scope="module")
 def fitted(module_spec, module_config):
@@ -46,8 +48,9 @@ def test_smote_does_not_resample_at_prediction(fitted):
 
 def test_score_transactions_from_raw_columns(fitted):
     spec, models, _, test = fitted
-    out = score_transactions(models["Random Forest"], 0.5, test[spec.raw_cols], spec)
-    assert list(out.columns) == ["fraud_proba", "is_fraud"]
+    out = score_transactions(models["Random Forest"], AT_HALF, test[spec.raw_cols], spec)
+    assert list(out.columns) == ["fraud_proba", "expected_loss", "is_fraud"]
+    np.testing.assert_allclose(out["expected_loss"], out["fraud_proba"] * test["Amount"])
     assert len(out) == len(test)
 
 
@@ -55,11 +58,20 @@ def test_extreme_amounts_do_not_crash(fitted):
     spec, models, _, test = fitted
     extreme = test.iloc[:3].copy()
     extreme["Amount"] = 1e7
-    assert len(score_transactions(models["XGBoost"], 0.5, extreme, spec)) == 3
+    assert len(score_transactions(models["XGBoost"], AT_HALF, extreme, spec)) == 3
 
 
-@pytest.mark.parametrize("name", ["Random Forest", "XGBoost"])
+@pytest.mark.parametrize("name", ["Random Forest", "XGBoost", "LightGBM"])
 def test_shap_explanation_shape(fitted, name):
     spec, models, _, test = fitted
     expl = explain(models[name], test.iloc[:4], spec)
     assert expl.values.shape == (4, len(spec.features))
+
+
+def test_lightgbm_guards_against_exploding_leaves(fitted):
+    """Regression: without a minimum hessian per leaf, LightGBM diverged on the creditcard data."""
+    spec, _, train, _ = fitted
+    clf = build_models(train["Class"], {"LightGBM": {}}, spec.scale_cols)["LightGBM"].named_steps["clf"]
+    assert clf.get_params()["min_child_weight"] == 1.0
+    overridden = build_models(train["Class"], {"LightGBM": {"min_child_weight": 5}}, spec.scale_cols)
+    assert overridden["LightGBM"].named_steps["clf"].get_params()["min_child_weight"] == 5

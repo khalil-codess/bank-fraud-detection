@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from sklearn.metrics import ConfusionMatrixDisplay, PrecisionRecallDisplay  # noqa: E402
 
+from fraud.calibration import expected_calibration_error, reliability  # noqa: E402
 from fraud.evaluate import savings_curve  # noqa: E402
 from fraud.inference import explain  # noqa: E402
 
@@ -63,21 +64,38 @@ def plot_confusion(y_test, pred, title: str, path: Path) -> None:
     _save(fig, path)
 
 
-def plot_savings_curve(y_test, proba, amount, review_cost, threshold, title, path: Path) -> None:
-    """Net savings as the number of alerts grows; the marker is the threshold chosen on validation."""
+def plot_savings_curve(y_test, proba, amount, review_cost, chosen_alerts: int, title, path: Path) -> None:
+    """Net savings if the k most suspicious transactions are reviewed; the marker is the number of
+    alerts raised by the decision rule chosen on validation."""
     _, n_alerts, savings = savings_curve(y_test, proba, amount, review_cost)
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    ax.plot(n_alerts, savings, color=COLORS[0])
-    chosen = int((np.asarray(proba) >= threshold).sum())
-    if chosen:
-        ax.axvline(chosen, color=COLORS[1], ls="--", label=f"Chosen threshold: {chosen} alerts")
+    ax.plot(n_alerts, savings, color=COLORS[0], label="Review the top-k scores")
+    if chosen_alerts:
+        ax.axvline(chosen_alerts, color=COLORS[1], ls="--", label=f"Chosen rule: {chosen_alerts} alerts")
     ax.axhline(0, color="k", lw=0.8, alpha=0.5)
     ax.set_xscale("log")
     best = max(float(np.max(savings)), 1.0)
     ax.set_ylim(-best, best * 1.2)  # flagging everything loses a fortune; zoom on the useful range
     ax.set(xlabel="Number of alerts reviewed (most suspicious first)",
            ylabel="Net savings (fraud caught - review cost)",
-           title=f"{title}: savings on the test set (review cost = {review_cost:g} per alert)")
+           title=f"{title}: test-set savings (review cost = {review_cost:g} per alert)")
+    ax.legend(loc="upper left")
+    _save(fig, path)
+
+
+def plot_reliability(y_test, probas: dict, path: Path, n_bins: int = 10) -> None:
+    """Predicted probability vs observed fraud rate; a calibrated model follows the diagonal."""
+    fig, ax = plt.subplots(figsize=(6, 5.5))
+    ax.plot([0, 1], [0, 1], "k--", alpha=0.4, label="Perfect calibration")
+    for (name, proba), color in zip(probas.items(), (COLORS[1], COLORS[0]), strict=False):
+        rows = reliability(y_test, proba, n_bins)
+        pred, obs, counts = (np.array(v) for v in zip(*rows, strict=True))
+        ece = expected_calibration_error(y_test, proba, n_bins)
+        ax.plot(pred, obs, "o-", color=color, label=f"{name} (ECE {ece:.4f})")
+        for x, y, c in zip(pred, obs, counts, strict=True):
+            ax.annotate(f"{c:,}", (x, y), fontsize=6, alpha=0.6, xytext=(3, -8), textcoords="offset points")
+    ax.set(xlim=(0, 1), ylim=(0, 1), xlabel="Predicted fraud probability",
+           ylabel="Observed fraud rate", title="Calibration on the test set (labels: transactions per bin)")
     ax.legend(loc="upper left")
     _save(fig, path)
 

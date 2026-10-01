@@ -30,12 +30,16 @@ def load(art: Path):
 model, metrics, spec, demo = load(ART)
 st.sidebar.caption(spec.description)
 
-threshold = metrics["threshold"]
-test_m = metrics["models"][metrics["selected_model"]]["test"]
+policy = metrics["policy"]
+test_m = metrics["final"]  # selected model, calibrated, with its decision rule, on the test period
+if policy["rule"] == "expected_value":
+    rule_text = f"review when fraud probability × amount ≥ {policy['review_cost']:g} (the review cost)"
+else:
+    rule_text = f"review when fraud probability ≥ {policy['threshold']:.3f}"
 
 st.title("🔍 Bank Fraud Detector")
-st.caption(f"Model: {metrics['selected_model']} · decision threshold: {threshold:.3f} "
-           "(chosen on validation data, never on the test set)")
+st.caption(f"Model: {metrics['selected_model']} (calibrated) · decision: {rule_text}. "
+           "Everything was chosen on validation data, never on the test set.")
 
 tab_demo, tab_batch, tab_perf = st.tabs(["Real transaction", "Score a CSV file", "Performance"])
 
@@ -55,17 +59,20 @@ with tab_demo:
         st.dataframe(details.T.rename(columns=lambda _: "value").astype(str), width="stretch")
 
     with col_out:
-        res = score_transactions(model, threshold, tx, spec).iloc[0]
+        res = score_transactions(model, policy, tx, spec).iloc[0]
         if res["is_fraud"]:
-            st.error("🚨 Flagged as FRAUD")
+            st.error("🚨 Send for review: likely FRAUD")
         else:
-            st.success("✅ Looks legitimate")
-        c1, c2 = st.columns(2)
-        c1.metric("Fraud score", f"{res['fraud_proba'] * 100:.1f} %")
-        c2.metric("True label", "Fraud" if int(pool.iloc[idx]["Class"]) else "Legitimate")
+            st.success("✅ Let it through")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Fraud score", f"{res['fraud_proba'] * 100:.1f} %", help="Calibrated probability of fraud")
+        c2.metric("Expected loss", f"{res['expected_loss']:,.2f}", help="Fraud probability × amount")
+        c3.metric("True label", "Fraud" if int(pool.iloc[idx]["Class"]) else "Legitimate")
+        st.caption(f"Decision: {rule_text}.")
 
         st.subheader("Why this score?")
-        st.caption("Red pushes towards fraud, blue towards legitimate.")
+        st.caption("SHAP values on the model's raw log-odds score. "
+                   "Red pushes towards fraud, blue towards legitimate.")
         fig = plt.figure()
         shap.waterfall_plot(explain(model, tx, spec)[0], max_display=12, show=False)
         st.pyplot(fig)
@@ -86,13 +93,14 @@ with tab_batch:
         if error:
             st.error(error)
         else:
-            scored = pd.concat([raw, score_transactions(model, threshold, raw, spec)], axis=1)
-            flagged = scored[scored["is_fraud"]].sort_values("fraud_proba", ascending=False)
+            scored = pd.concat([raw, score_transactions(model, policy, raw, spec)], axis=1)
+            flagged = scored[scored["is_fraud"]].sort_values("expected_loss", ascending=False)
             c1, c2, c3 = st.columns(3)
             c1.metric("Transactions", f"{len(scored):,}")
             c2.metric("Flagged", f"{len(flagged):,}")
             c3.metric("Flag rate", f"{len(flagged) / len(scored) * 100:.2f} %")
-            st.dataframe(flagged[["fraud_proba", "Time", "Amount"]].head(200), width="stretch")
+            columns = ["expected_loss", "fraud_proba", "Amount", "Time"]
+            st.dataframe(flagged[columns].head(200), width="stretch")
             st.download_button("Download scored CSV", scored.to_csv(index=False).encode(),
                                "scored_transactions.csv", "text/csv")
 
@@ -111,12 +119,12 @@ with tab_perf:
     c[2].metric("Precision", f"{test_m['precision']:.2f}")
     c[3].metric("Recall", f"{test_m['recall']:.2f}")
     c[4].metric("F1", f"{test_m['f1']:.2f}")
-    st.caption(f"At the selected threshold: {test_m['tp']} frauds caught, {test_m['fn']} missed, "
+    st.caption(f"With the chosen decision rule: {test_m['tp']} frauds caught, {test_m['fn']} missed, "
                f"{test_m['fp']} false alarms. 95% CI of PR-AUC: {lo:.2f} – {hi:.2f}.")
 
     st.subheader("Business impact")
     st.markdown(f"Cost model: a missed fraud costs its amount; reviewing an alert costs "
-                f"**{metrics['review_cost']:g}**. The threshold maximises net savings on validation data.")
+                f"**{metrics['review_cost']:g}**. Decision: {rule_text}.")
     c = st.columns(4)
     c[0].metric("Fraud amount in test", f"{test_m['fraud_amount_total']:,.0f}")
     c[1].metric("Caught", f"{test_m['fraud_amount_caught']:,.0f}")
@@ -144,6 +152,17 @@ with tab_perf:
             for n, m in metrics["models"].items()]
     st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
-    for img in ("savings_curve.png", "cv_results.png", "pr_curves.png", "shap_summary.png"):
+    cal = metrics["calibration"]
+    st.markdown(f"**Calibration.** Scores are calibrated on validation data (Platt scaling), so a 30% "
+                f"score means about 30% real risk. On the test period the expected calibration error "
+                f"falls from {cal['raw_ece']:.4f} to {cal['calibrated_ece']:.4f}.")
+    rows = [{"Decision rule": name, "Validation savings": round(d["val"]["savings"]),
+             "Test savings": round(d["test"]["savings"]), "Test alerts": d["test"]["n_alerts"],
+             "Test precision": round(d["test"]["precision"], 3), "Test recall": round(d["test"]["recall"], 3)}
+            for name, d in metrics["decision"].items()]
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+
+    figures = ("savings_curve.png", "calibration.png", "cv_results.png", "pr_curves.png", "shap_summary.png")
+    for img in figures:
         if (OUT / img).exists():
             st.image(str(OUT / img))

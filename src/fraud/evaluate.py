@@ -53,9 +53,24 @@ def select_threshold_by_cost(y_true, proba, amount, review_cost: float) -> float
     return float(thresholds[i])
 
 
-def cost_metrics(y_true, proba, amount, threshold: float, review_cost: float) -> dict:
-    y_true, amount = np.asarray(y_true), np.asarray(amount, dtype=float)
-    alert = np.asarray(proba) >= threshold
+def decide(proba, amount, policy: dict) -> np.ndarray:
+    """Which transactions to send for review under a decision policy.
+
+    - {"rule": "threshold", "threshold": t}: alert when the score >= t.
+    - {"rule": "expected_value", "review_cost": c}: alert when probability x amount >= c, i.e. when
+      the expected fraud loss avoided pays for the review. Needs calibrated probabilities, and
+      reviews a large purchase at a lower risk than a small one.
+    """
+    proba = np.asarray(proba, dtype=float)
+    if policy["rule"] == "threshold":
+        return proba >= policy["threshold"]
+    if policy["rule"] == "expected_value":
+        return proba * np.asarray(amount, dtype=float) >= policy["review_cost"]
+    raise ValueError(f"Unknown decision rule {policy['rule']!r}")
+
+
+def cost_metrics(y_true, alert, amount, review_cost: float) -> dict:
+    y_true, amount, alert = np.asarray(y_true), np.asarray(amount, dtype=float), np.asarray(alert, bool)
     fraud_total = float(amount[y_true == 1].sum())
     caught = float(amount[(y_true == 1) & alert].sum())
     review = float(review_cost * alert.sum())
@@ -70,13 +85,15 @@ def cost_metrics(y_true, proba, amount, threshold: float, review_cost: float) ->
     }
 
 
-def evaluate(y_true, proba, threshold: float, amount=None, review_cost: float | None = None) -> dict:
-    """Metrics at the threshold, threshold-free ones (ROC-AUC, PR-AUC) and, given amounts, savings."""
+def evaluate(y_true, proba, threshold: float | None = None, amount=None,
+             review_cost: float | None = None, alerts=None) -> dict:
+    """Metrics of the alerts (`alerts`, or score >= `threshold`), threshold-free ones (ROC-AUC,
+    PR-AUC) and, given amounts and a review cost, the savings."""
     y_true = np.asarray(y_true)
-    pred = (proba >= threshold).astype(int)
+    pred = (np.asarray(proba) >= threshold if alerts is None else np.asarray(alerts, bool)).astype(int)
     tn, fp, fn, tp = confusion_matrix(y_true, pred, labels=[0, 1]).ravel()
     out = {
-        "threshold": float(threshold),
+        "threshold": None if threshold is None else float(threshold),
         "roc_auc": float(roc_auc_score(y_true, proba)),
         "pr_auc": float(average_precision_score(y_true, proba)),
         "precision": float(precision_score(y_true, pred, zero_division=0)),
@@ -85,7 +102,7 @@ def evaluate(y_true, proba, threshold: float, amount=None, review_cost: float | 
         "tp": int(tp), "fp": int(fp), "fn": int(fn), "tn": int(tn),
     }
     if amount is not None and review_cost is not None:
-        out |= cost_metrics(y_true, proba, amount, threshold, review_cost)
+        out |= cost_metrics(y_true, pred, amount, review_cost)
     return out
 
 

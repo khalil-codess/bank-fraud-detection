@@ -41,6 +41,14 @@ models:
     max_depth: 4
     subsample: 0.8
     colsample_bytree: 0.8
+  LightGBM:
+    n_estimators: 400
+    learning_rate: 0.05
+    num_leaves: 63
+    min_child_samples: 50
+    subsample: 0.8
+    subsample_freq: 1
+    colsample_bytree: 0.8
   XGBoost + SMOTE:
     smote_ratio: 0.1   # minority/majority ratio after oversampling (train only)
     n_estimators: 300

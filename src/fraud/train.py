@@ -24,10 +24,11 @@ import joblib
 import pandas as pd
 
 from fraud import __version__, plots
+from fraud.calibration import brier_score, expected_calibration_error, fit_calibration
 from fraud.config import Config, load_config
 from fraud.data import load_transactions, time_split
 from fraud.datasets import get_dataset
-from fraud.evaluate import at_k, bootstrap_ci, evaluate, paired_bootstrap
+from fraud.evaluate import at_k, bootstrap_ci, decide, evaluate, paired_bootstrap
 from fraud.models import TREE_MODELS, build_models
 from fraud.validation import cross_validate, pick_threshold
 
@@ -87,13 +88,39 @@ def run(cfg: Config) -> dict:
     comparisons = {other: paired_bootstrap(y_test, p_best, test_probas[other])
                    for other in report if other != best}
 
+    # ── 3b. Calibrate the selected model, then pick the decision rule (validation only) ──
+    p_val_raw = best_model.predict_proba(X_val)[:, 1]
+    final_model = fit_calibration(best_model, p_val_raw, y_val)
+    q_val, q_test = final_model.calibrate(p_val_raw), final_model.calibrate(p_best)
+    calibration = {"slope": final_model.slope, "intercept": final_model.intercept}
+    for name, p in (("raw", p_best), ("calibrated", q_test)):
+        calibration[f"{name}_brier"] = brier_score(y_test, p)
+        calibration[f"{name}_ece"] = expected_calibration_error(y_test, p)
+
+    policies = {"threshold": {"rule": "threshold", "review_cost": cfg.review_cost,
+                              "threshold": pick_threshold(y_val, q_val, val["Amount"], cfg)}}
+    if cfg.threshold_method == "cost":
+        policies["expected_value"] = {"rule": "expected_value", "review_cost": cfg.review_cost}
+    parts = (("val", y_val, q_val, val["Amount"]), ("test", y_test, q_test, test["Amount"]))
+    decision = {}
+    for name, pol in policies.items():
+        decision[name] = {"policy": pol}
+        for part, y, q, amount in parts:
+            decision[name][part] = evaluate(y, q, amount=amount, review_cost=cfg.review_cost,
+                                            alerts=decide(q, amount, pol))
+    rule = max(decision, key=lambda r: decision[r]["val"]["savings"])
+    policy, final = policies[rule], decision[rule]["test"]
+    final_alerts = decide(q_test, test["Amount"], policy)
+
     # ── 4. Figures ──────────────────────────────────────────────────────────
     plots.plot_pr_curves(y_test, test_probas, {n: r["test"]["pr_auc"] for n, r in report.items()},
                          cfg.outputs_dir / "pr_curves.png")
-    plots.plot_confusion(y_test, (p_best >= threshold).astype(int),
-                         f"{best}\nthreshold = {threshold:.3f}", cfg.outputs_dir / "confusion_matrix.png")
-    plots.plot_savings_curve(y_test, p_best, test["Amount"], cfg.review_cost, threshold, best,
-                             cfg.outputs_dir / "savings_curve.png")
+    plots.plot_confusion(y_test, final_alerts.astype(int), f"{best}\ndecision rule: {rule}",
+                         cfg.outputs_dir / "confusion_matrix.png")
+    plots.plot_savings_curve(y_test, q_test, test["Amount"], cfg.review_cost, int(final_alerts.sum()),
+                             f"{best} ({rule} rule)", cfg.outputs_dir / "savings_curve.png")
+    plots.plot_reliability(y_test, {"Raw score": p_best, "Calibrated": q_test},
+                           cfg.outputs_dir / "calibration.png")
     if cv:
         plots.plot_cv(cv, cfg.outputs_dir / "cv_results.png")
     if cfg.shap and isinstance(best_model.named_steps["clf"], TREE_MODELS):
@@ -101,7 +128,7 @@ def run(cfg: Config) -> dict:
         plots.plot_shap(best_model, test, spec, cfg.outputs_dir, cfg.shap_sample, cfg.seed)
 
     # ── 5. Artifacts ────────────────────────────────────────────────────────
-    joblib.dump(best_model, cfg.artifacts_dir / "fraud_model.joblib")
+    joblib.dump(final_model, cfg.artifacts_dir / "fraud_model.joblib")
     # Real test transactions for the dashboard demo: every fraud + up to 300 legitimate ones
     legit = test[test["Class"] == 0]
     demo = pd.concat([test[test["Class"] == 1], legit.sample(min(300, len(legit)), random_state=0)])
@@ -114,7 +141,11 @@ def run(cfg: Config) -> dict:
         "dataset": cfg.dataset,
         "selected_model": best,
         "selected_by": selected_by,
-        "threshold": threshold,
+        "policy": policy,               # decision rule used by scoring and the dashboard
+        "final": final,                 # selected model + calibration + policy, on the test set
+        "decision": decision,           # every rule: validation (used to choose) and test (report)
+        "calibration": calibration,
+        "threshold": threshold,         # raw-score threshold used in the model comparison
         "threshold_method": cfg.threshold_method,
         "beta": cfg.beta,
         "review_cost": cfg.review_cost,
@@ -133,7 +164,22 @@ def run(cfg: Config) -> dict:
     }
     (cfg.artifacts_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     _log_summary(report, best, budgets, comparisons)
+    _log_decision(decision, rule, calibration)
     return metrics
+
+
+def _log_decision(decision: dict, rule: str, calibration: dict) -> None:
+    c = calibration
+    lines = [f"Calibration on test: Brier {c['raw_brier']:.5f} -> {c['calibrated_brier']:.5f}, "
+             f"ECE {c['raw_ece']:.4f} -> {c['calibrated_ece']:.4f}",
+             f"{'Decision rule':16s} {'val savings':>12s} {'test savings':>13s} {'rate':>6s} "
+             f"{'alerts':>7s} {'prec':>5s} {'recall':>6s}"]
+    for name, d in decision.items():
+        t = d["test"]
+        lines.append(f"{name:16s} {d['val']['savings']:12,.0f} {t['savings']:13,.0f} "
+                     f"{t['savings_rate']:6.1%} {t['n_alerts']:7d} {t['precision']:5.2f} {t['recall']:6.3f}"
+                     f"{'  <- chosen on validation' if name == rule else ''}")
+    log.info("Calibrated decision\n%s", "\n".join(lines))
 
 
 def _log_cv(cv: dict, selection_metric: str) -> None:

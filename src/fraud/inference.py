@@ -9,6 +9,7 @@ import joblib
 import pandas as pd
 
 from fraud.datasets import DatasetSpec, get_dataset
+from fraud.evaluate import decide
 
 
 def load_artifacts(artifacts_dir: str | Path):
@@ -19,10 +20,15 @@ def load_artifacts(artifacts_dir: str | Path):
     return model, metrics, get_dataset(metrics["dataset"])
 
 
-def score_transactions(model, threshold: float, raw_df: pd.DataFrame, spec: DatasetSpec) -> pd.DataFrame:
-    """Score raw transactions -> DataFrame with fraud_proba and is_fraud."""
+def score_transactions(model, policy: dict, raw_df: pd.DataFrame, spec: DatasetSpec) -> pd.DataFrame:
+    """Score raw transactions -> fraud_proba, expected_loss (= proba x amount) and is_fraud (alert
+    under the decision policy saved in metrics.json)."""
     proba = model.predict_proba(spec.add_features(raw_df))[:, 1]
-    return pd.DataFrame({"fraud_proba": proba, "is_fraud": proba >= threshold}, index=raw_df.index)
+    return pd.DataFrame({
+        "fraud_proba": proba,
+        "expected_loss": proba * raw_df["Amount"].to_numpy(dtype=float),
+        "is_fraud": decide(proba, raw_df["Amount"], policy),
+    }, index=raw_df.index)
 
 
 def explain(model, raw_df: pd.DataFrame, spec: DatasetSpec):

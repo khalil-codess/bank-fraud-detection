@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 from conftest import config_for
 
+from fraud.calibration import CalibratedModel
 from fraud.datasets import DATASETS, get_dataset
 from fraud.inference import load_artifacts, score_transactions
 from fraud.train import run
@@ -45,5 +46,25 @@ def test_saved_model_flags_frauds(trained):
     model, metrics, spec = load_artifacts(cfg.artifacts_dir)
     assert spec.name == cfg.dataset
     demo = pd.read_csv(cfg.artifacts_dir / "demo_transactions.csv")
-    flagged = score_transactions(model, metrics["threshold"], demo, spec)["is_fraud"]
+    flagged = score_transactions(model, metrics["policy"], demo, spec)["is_fraud"]
     assert flagged[demo["Class"] == 1].mean() > flagged[demo["Class"] == 0].mean() + 0.5
+
+
+def test_saved_model_is_calibrated_and_keeps_the_ranking(trained):
+    """Calibration is monotone: the final model ranks exactly like the selected raw model."""
+    cfg, metrics = trained
+    model, _, _ = load_artifacts(cfg.artifacts_dir)
+    assert isinstance(model, CalibratedModel) and model.slope > 0
+    raw = metrics["models"][metrics["selected_model"]]["test"]
+    assert metrics["final"]["pr_auc"] == pytest.approx(raw["pr_auc"], abs=1e-9)
+
+
+def test_decision_rule_chosen_on_validation(trained):
+    _, metrics = trained
+    decision = metrics["decision"]
+    assert set(decision) == {"threshold", "expected_value"}  # both rules evaluated (cost method)
+    chosen = metrics["policy"]["rule"]
+    assert decision[chosen]["val"]["savings"] == max(d["val"]["savings"] for d in decision.values())
+    assert metrics["final"] == decision[chosen]["test"]
+    final = metrics["final"]
+    assert final["tp"] + final["fn"] == metrics["data"]["test"]["frauds"]
