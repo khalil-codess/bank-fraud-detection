@@ -148,6 +148,63 @@ savings.
 - Logistic regression can't model the interactions that matter (large amount *and* online
   category *and* night *and* unusual for this card).
 
+## Real-time scoring API
+
+`src/fraud/api.py` serves the Sparkov model with FastAPI. `POST /score` takes one transaction,
+computes its card-history features from the card's earlier transactions, applies the decision
+rule chosen at training time, returns the reasons, and then records the transaction in the card's
+history.
+
+```bash
+docker compose up --build        # API on :8000 (docs at /docs), dashboard on :8502
+```
+
+A new 1,250 USD online purchase at 2 a.m. on a real card from the dataset:
+
+```json
+{
+  "transaction_id": "risky-1",
+  "decision": "review",
+  "fraud_probability": 0.0087,
+  "expected_loss": 10.92,
+  "rule": "expected_value",
+  "reasons": [
+    {"text": "Amount 1,250.00 USD", "impact": 4.39, "protected": false},
+    {"text": "Amount is 19.7x this card's average (63.56 USD)", "impact": 1.68, "protected": false},
+    {"text": "Made on a Saturday", "impact": 0.11, "protected": false}
+  ],
+  "card_transactions_before": 1463
+}
+```
+
+The probability is under 1%, but 0.87% of 1,250 USD is more than the 5 USD review cost, so
+the expected-value rule sends it for review.
+
+**Training/serving consistency.** Training computes card history for a whole table at once
+(`history.py`). The API keeps a small state per card and updates it one transaction at a time
+(`state.py`). Both use the same running sums in the same order, and tests require them to be
+exactly equal. `python -m fraud.benchmark` warms the state with everything before the test
+period, then replays real test transactions one by one through the service:
+
+| 2,000 replayed test transactions | |
+|---|---|
+| Difference from offline batch scores | **0.0** (identical probabilities, 100% same decisions) |
+| Latency p50 / p95 / p99 | **44 / 69 / 71 ms** (features + model + SHAP reasons, without HTTP) |
+
+Profiling took this from 106 ms to 44 ms: features are now computed once per request instead of
+three times, the feature frame is built in one go (adding 34 columns one by one cost ~1 ms
+each), and the SHAP explainer is built once and cached. A warm-up at startup keeps the first
+request from paying for the explainer (1.3 s → 53 ms).
+
+**Production notes.**
+- The image pins the exact library versions the model was trained with
+  (`requirements-lock.txt`), because pickled models are only safe with those versions.
+- At startup, card history is rebuilt from `data/raw/sparkov` (999 cards, ~30 s). A real service
+  would persist it in a store such as Redis.
+- Requests are processed one at a time under a lock, so score-then-record never interleaves for
+  a card. Scaling out would need per-card locking in the shared store.
+- A transaction older than the card's latest one is rejected (HTTP 409).
+
 ## Results: `creditcard` dataset
 
 **How models are evaluated.** The data is split by time: train → validation → test (the last 15%).
@@ -224,11 +281,15 @@ src/fraud/
   calibration.py Platt calibration, reliability and calibration error
   tune.py        Optuna hyper-parameter search inside the training window
   reasons.py     plain-language reason codes from SHAP
+  state.py       online card history (same values as history.py, one transaction at a time)
+  api.py         FastAPI scoring service
+  benchmark.py   replay test transactions through the service: latency + consistency
   inference.py   load artifacts, score and explain transactions
   plots.py       figures written to outputs/
   synthetic.py   CLI writing synthetic data in a dataset's file format
   train.py       training entry point
 app.py           Streamlit dashboard
+Dockerfile, docker-compose.yml, requirements-lock.txt   container setup (API + dashboard)
 configs/         one config per dataset: paths, split, costs, CV, model hyper-parameters
 tests/           pytest suite (unit + end-to-end)
 artifacts/<ds>/  metrics.json, demo_transactions.csv (committed); fraud_model.joblib (generated)
@@ -240,7 +301,7 @@ archive/         first notebook, kept for reference
 
 ```bash
 python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
-pip install -e ".[app,dev]"
+pip install -e ".[app,api,dev]"
 ```
 
 Download the data (see [Datasets](#datasets)): `fraudTrain.csv` and `fraudTest.csv` into
@@ -254,6 +315,8 @@ python -m fraud.tune --config configs/sparkov.yaml --model XGBoost --trials 40  
 pytest --cov                       # tests
 ruff check src tests app.py        # lint
 streamlit run app.py               # dashboard; pick the dataset in the sidebar
+uvicorn fraud.api:app --port 8000  # scoring API (FRAUD_HISTORY=data/raw/sparkov to warm card history)
+python -m fraud.benchmark          # replay test transactions through the API service
 ```
 
 No Kaggle account? Try the pipeline on synthetic data:
@@ -283,6 +346,7 @@ python -m fraud.train --config configs/sparkov.yaml --data data/synthetic.csv
 5. ~~Behavioural features (velocity, card history, geography)~~
 6. ~~LightGBM, Optuna tuning, probability calibration, expected-value decision rule~~
 7. ~~Readable reason codes~~
-8. FastAPI scoring service + Docker, MLflow tracking, drift monitoring
+8. ~~FastAPI scoring service + Docker~~
+9. MLflow tracking, drift monitoring
 
 Joblib model files execute code when loaded: only load models you trained yourself.

@@ -21,9 +21,9 @@ from fraud.datasets import DatasetSpec
 from fraud.inference import explain
 
 
-def group_contributions(model, raw_df: pd.DataFrame, spec: DatasetSpec):
+def group_contributions(model, raw_df: pd.DataFrame, spec: DatasetSpec, features: pd.DataFrame | None = None):
     """Per-row SHAP contributions summed by reason group -> (DataFrame rows x groups, base values)."""
-    expl = explain(model, raw_df, spec)
+    expl = explain(model, raw_df, spec, features)
     groups: dict[str, list[int]] = defaultdict(list)
     for i, name in enumerate(expl.feature_names):
         groups[spec.reason_groups[name]].append(i)
@@ -32,14 +32,15 @@ def group_contributions(model, raw_df: pd.DataFrame, spec: DatasetSpec):
     return contrib, np.asarray(expl.base_values, dtype=float).reshape(-1)
 
 
-def reason_codes(model, raw_df: pd.DataFrame, spec: DatasetSpec, top_k: int = 3) -> list[list[dict]]:
+def reason_codes(model, raw_df: pd.DataFrame, spec: DatasetSpec, top_k: int = 3,
+                 features: pd.DataFrame | None = None) -> list[list[dict]]:
     """For each row, up to `top_k` reasons that push the score towards fraud, strongest first.
 
     Each reason: {"group", "impact" (log-odds contribution, > 0), "text", "protected" (True when
     the reason is a protected attribute such as age or gender)}.
     """
-    contrib, _ = group_contributions(model, raw_df, spec)
-    features = spec.add_features(raw_df)
+    features = spec.add_features(raw_df) if features is None else features
+    contrib, _ = group_contributions(model, raw_df, spec, features)
     out = []
     for idx, row in contrib.iterrows():
         top = row[row > 0].sort_values(ascending=False).head(top_k)

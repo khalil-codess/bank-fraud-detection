@@ -82,6 +82,11 @@ def card_history(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _exclusive_cumsum(values: np.ndarray, group: np.ndarray) -> np.ndarray:
-    """Per-group running sum of the *earlier* values (0 for a group's first row)."""
-    inclusive = pd.Series(values).groupby(group).cumsum().to_numpy()
+    """Per-group running sum of the *earlier* values (0 for a group's first row).
+
+    Plain sequential addition per group (np.cumsum), so the online store (state.py), which adds
+    one transaction at a time, reproduces it bit for bit. Rows must be sorted by group.
+    """
+    starts = np.flatnonzero(np.r_[True, group[1:] != group[:-1]])
+    inclusive = np.concatenate([np.cumsum(chunk) for chunk in np.split(values, starts[1:])])
     return inclusive - values

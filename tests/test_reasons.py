@@ -88,3 +88,18 @@ def test_protected_attributes_are_flagged():
     reasons = [{"text": "Cardholder age 46", "protected": True},
                {"text": "Amount 5.00 USD", "protected": False}]
     assert format_reasons(reasons) == "Cardholder age 46 [protected attribute] | Amount 5.00 USD"
+
+
+def test_linear_model_explanations_add_up_too(module_spec):
+    """Logistic regression gets exact coefficient x value contributions instead of tree SHAP."""
+    spec = module_spec
+    train, _, test = time_split(spec.synthetic(3000, seed=0))
+    params = config_for(spec.name).models["Logistic Regression"]
+    name = "Logistic Regression"
+    model = build_models(train["Class"], {name: params}, spec.scale_cols)[name]
+    model.fit(spec.add_features(train), train["Class"])
+    rows = test.iloc[:20]
+    contrib, base = group_contributions(model, rows, spec)
+    p = model.predict_proba(spec.add_features(rows))[:, 1]
+    np.testing.assert_allclose(base + contrib.sum(axis=1).to_numpy(), np.log(p / (1 - p)), atol=1e-6)
+    assert all(isinstance(r, list) for r in reason_codes(model, rows, spec))

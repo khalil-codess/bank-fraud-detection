@@ -17,7 +17,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - name: Install
-        run: pip install -e ".[app,dev]"
+        run: pip install -e ".[app,api,dev]"
       - name: Lint
         run: ruff check src tests app.py
       - name: Tests

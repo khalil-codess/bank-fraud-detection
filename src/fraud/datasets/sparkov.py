@@ -89,14 +89,16 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     History columns only describe the past, so the current amount can change (dashboard what-if)
     and the features that compare it with the card's habits still update correctly.
     """
+    # Columns are collected in a dict and the frame is built once: adding 34 columns one by one
+    # costs ~1 ms each, which dominated the latency of scoring a single transaction.
     ts = timestamps(df)
-    out = pd.DataFrame(index=df.index)
+    out = {}
     out["Amount_log"] = np.log1p(df["Amount"].clip(lower=0))
     hour = ts.dt.hour + ts.dt.minute / 60
     out["Hour_sin"] = np.sin(2 * np.pi * hour / 24)
     out["Hour_cos"] = np.cos(2 * np.pi * hour / 24)
     out["Day_of_week"] = ts.dt.dayofweek
-    out["Age"] = (ts - pd.to_datetime(df["dob"])).dt.days / 365.25
+    out["Age"] = (ts - pd.to_datetime(df["dob"], format="ISO8601")).dt.days / 365.25
     out["Gender_M"] = (df["gender"] == "M").astype(int)
     out["City_pop_log"] = np.log1p(df["city_pop"].clip(lower=0))
     out["Distance_km"] = haversine_km(df["lat"], df["long"], df["merch_lat"], df["merch_long"])
@@ -117,9 +119,10 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
                    index=df.index).fillna(0.0)
     out["Km_from_prev_tx"] = km
     out["Speed_kmh_from_prev_log"] = np.log1p(km / (secs.clip(lower=60) / 3600))
+    category = df["category"].to_numpy()
     for c in CATEGORIES:  # fixed list: an unseen category simply gets all zeros
-        out[f"cat_{c}"] = (df["category"] == c).astype(int)
-    return out[FEATURES]
+        out[f"cat_{c}"] = (category == c).astype(int)
+    return pd.DataFrame(out, index=df.index)[FEATURES]
 
 
 CATEGORY_LABELS = {

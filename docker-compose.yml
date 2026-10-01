@@ -1,0 +1,31 @@
+# docker compose up --build
+#   API:       http://localhost:8000/docs
+#   Dashboard: http://localhost:8502
+# ./data is mounted read-only so the API can warm card histories from data/raw/sparkov.
+services:
+  api:
+    build: .
+    image: fraud-detection:latest
+    command: ["uvicorn", "fraud.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      FRAUD_ARTIFACTS: artifacts/sparkov
+      FRAUD_HISTORY: data/raw/sparkov
+    volumes:
+      - ./data:/app/data:ro
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+
+  dashboard:
+    image: fraud-detection:latest
+    command: ["streamlit", "run", "app.py", "--server.port", "8501", "--server.address", "0.0.0.0",
+              "--server.headless", "true"]
+    ports:
+      - "8502:8501"   # 8502 on the host: 8501 is often taken by another Streamlit app
+    depends_on:
+      - api
