@@ -59,10 +59,6 @@ savings curve (`outputs/creditcard/savings_curve.png`).
 
 Everything above is regenerated into `artifacts/creditcard/metrics.json` by each training run.
 
-> **Correction of an earlier version.** A previous README reported F1 0.87 / precision 0.91 for
-> XGBoost. Those values were hardcoded and did not match what the code produced (measured with the
-> same protocol: precision ≈ 0.53, F1 ≈ 0.66). They have been removed.
-
 ## Design decisions
 
 | Problem in the first version | Fix |
