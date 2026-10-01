@@ -251,4 +251,5 @@ SPEC = DatasetSpec(
     enrich=enrich,
     reason_groups=REASON_GROUPS,
     describe=describe,
+    protected_groups=frozenset({"cardholder_age", "cardholder_gender"}),
 )

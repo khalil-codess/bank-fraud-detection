@@ -74,8 +74,10 @@ with tab_demo:
         st.subheader("Why it was flagged" if res["is_fraud"] else "What raises the risk")
         reasons = reason_codes(model, tx, spec, top_k=3)[0]
         if reasons:
-            st.markdown("\n".join(f"{i}. **{r['text']}** (impact +{r['impact']:.2f})"
-                                  for i, r in enumerate(reasons, 1)))
+            st.markdown("\n".join(
+                f"{i}. **{r['text']}** (impact +{r['impact']:.2f})"
+                + (" ⚠ *protected attribute*" if r["protected"] else "")
+                for i, r in enumerate(reasons, 1)))
             st.caption("Impact = contribution to the model's log-odds score (SHAP), summed per reason.")
         else:
             st.markdown("Nothing in this transaction raises the risk above the baseline.")

@@ -95,6 +95,30 @@ groceries (in store)"). Because SHAP is additive, the groups plus the base value
 model's score exactly, and a test checks it. The dashboard shows the reasons for single
 transactions and adds a `reasons` column when scoring a CSV.
 
+### Protected attributes: age and gender
+
+The Sparkov model uses the cardholder's **age and gender**. Reason codes made this visible: one or
+the other is among the top three reasons of **3.4% (age) and 4.3% (gender)** of the 1,276
+alerts in the test period. In the dashboard and in CSV exports these reasons are marked
+*protected attribute*.
+
+Removing both features was measured (tuned XGBoost, best single threshold on validation, test
+period):
+
+| | With age & gender | Without |
+|---|---|---|
+| PR-AUC | 0.980 | 0.966 |
+| Alerts | 1,200 | 1,880 |
+| Precision | 0.75 | 0.48 |
+| Net savings | 474,338 USD (98.1%) | 471,558 USD (97.6%) |
+
+**Decision for this project: keep them, and document it.** This is a portfolio project on
+simulated data, and the Sparkov generator builds its fraud patterns from customer profiles, so
+part of this signal is likely an artifact of the simulator. A real bank could not do this: in
+the EU and the US, age and gender cannot justify treating a customer differently. It would have
+to drop both features and accept about 680 more alerts per 90 days (+57%) for 2,800 USD less
+savings.
+
 ### All models (card history, tuned)
 
 **Time-series cross-validation (4 folds, mean ± std)**

@@ -80,3 +80,11 @@ def test_sparkov_first_transaction_wording():
     assert sparkov.describe("recency", raw, feats) == "First transaction seen on this card"
     assert "No earlier" in sparkov.describe("amount_vs_usual", raw, feats)
     assert pd.isna(raw["hist_prev_lat"]) and "No previous" in sparkov.describe("travel", raw, feats)
+
+
+def test_protected_attributes_are_flagged():
+    assert sparkov.SPEC.protected_groups == {"cardholder_age", "cardholder_gender"}
+    assert set(sparkov.SPEC.protected_groups) <= set(sparkov.REASON_GROUPS.values())
+    reasons = [{"text": "Cardholder age 46", "protected": True},
+               {"text": "Amount 5.00 USD", "protected": False}]
+    assert format_reasons(reasons) == "Cardholder age 46 [protected attribute] | Amount 5.00 USD"
