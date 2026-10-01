@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from fraud.datasets import DatasetSpec
+from fraud.history import HISTORY_COLS, card_history
 
 EPOCH = pd.Timestamp("2019-01-01")
 CATEGORIES = [
@@ -27,11 +28,17 @@ COLUMNS = {
     "long": "long", "city_pop": "city_pop", "merch_lat": "merch_lat", "merch_long": "merch_long",
     "is_fraud": "Class",
 }
-RAW_COLS = ["Time", "Amount", "card_id", "merchant", "category", "gender", "dob",
-            "lat", "long", "city_pop", "merch_lat", "merch_long"]
+FILE_COLS = ["Time", "Amount", "card_id", "merchant", "category", "gender", "dob",
+             "lat", "long", "city_pop", "merch_lat", "merch_long"]
+RAW_COLS = FILE_COLS + HISTORY_COLS   # what scoring needs: the transaction + its card's history
 BASE_FEATURES = ["Amount_log", "Hour_sin", "Hour_cos", "Day_of_week", "Age", "Gender_M",
                  "City_pop_log", "Distance_km"]
-FEATURES = BASE_FEATURES + [f"cat_{c}" for c in CATEGORIES]
+HISTORY_FEATURES = ["Card_tx_1h", "Card_tx_24h", "Card_tx_7d", "Card_amount_24h_log",
+                    "Amount_vs_card_mean", "Amount_zscore_card", "Log_secs_since_prev",
+                    "Card_history_log", "First_time_merchant", "Card_category_share",
+                    "Km_from_prev_tx", "Speed_kmh_from_prev_log"]
+FEATURES = BASE_FEATURES + HISTORY_FEATURES + [f"cat_{c}" for c in CATEGORIES]
+NO_PREVIOUS_SECS = 30 * 86_400  # stand-in for "no earlier transaction on this card"
 
 
 def load(path: Path) -> pd.DataFrame:
@@ -50,12 +57,17 @@ def load(path: Path) -> pd.DataFrame:
         frames.append(pd.read_csv(f, usecols=list(COLUMNS)).rename(columns=COLUMNS))
     df = pd.concat(frames, ignore_index=True)
     df["Time"] = (pd.to_datetime(df.pop("timestamp")) - EPOCH).dt.total_seconds()
-    return df[RAW_COLS + ["Class"]]
+    return df[FILE_COLS + ["Class"]]
+
+
+def enrich(df: pd.DataFrame) -> pd.DataFrame:
+    """Add the card-history columns (earlier transactions only; labels never used)."""
+    return pd.concat([df.drop(columns=HISTORY_COLS, errors="ignore"), card_history(df)], axis=1)
 
 
 def to_raw(df: pd.DataFrame) -> pd.DataFrame:
     """Canonical frame -> Kaggle column names and timestamp format (inverse of `load`)."""
-    out = df.copy()
+    out = df.drop(columns=HISTORY_COLS, errors="ignore")
     out["timestamp"] = timestamps(out.pop("Time")).dt.strftime("%Y-%m-%d %H:%M:%S")
     return out.rename(columns={v: k for k, v in COLUMNS.items()})
 
@@ -72,7 +84,11 @@ def haversine_km(lat1, lon1, lat2, lon2):
 
 
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Per-transaction features (no history yet). Deterministic: identical in training and serving."""
+    """Features of the transaction and of its card's history (columns added by `enrich`).
+
+    History columns only describe the past, so the current amount can change (dashboard what-if)
+    and the features that compare it with the card's habits still update correctly.
+    """
     ts = timestamps(df)
     out = pd.DataFrame(index=df.index)
     out["Amount_log"] = np.log1p(df["Amount"].clip(lower=0))
@@ -84,6 +100,23 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     out["Gender_M"] = (df["gender"] == "M").astype(int)
     out["City_pop_log"] = np.log1p(df["city_pop"].clip(lower=0))
     out["Distance_km"] = haversine_km(df["lat"], df["long"], df["merch_lat"], df["merch_long"])
+
+    # ── card history ──
+    for w in ("1h", "24h", "7d"):
+        out[f"Card_tx_{w}"] = df[f"hist_n_{w}"]
+    out["Card_amount_24h_log"] = np.log1p(df["hist_amount_24h"].clip(lower=0))
+    mean, std = df["hist_mean"], df["hist_std"]
+    out["Amount_vs_card_mean"] = (df["Amount"] / mean.where(mean > 0)).fillna(1.0).clip(upper=1_000)
+    out["Amount_zscore_card"] = ((df["Amount"] - mean) / std.where(std > 0)).fillna(0.0).clip(-50, 50)
+    secs = df["hist_secs_since_prev"].fillna(NO_PREVIOUS_SECS)
+    out["Log_secs_since_prev"] = np.log1p(secs.clip(lower=0))
+    out["Card_history_log"] = np.log1p(df["hist_n"])
+    out["First_time_merchant"] = (df["hist_merchant_n"] == 0).astype(int)
+    out["Card_category_share"] = (df["hist_category_n"] / df["hist_n"].where(df["hist_n"] > 0)).fillna(0.0)
+    km = pd.Series(haversine_km(df["hist_prev_lat"], df["hist_prev_long"], df["merch_lat"], df["merch_long"]),
+                   index=df.index).fillna(0.0)
+    out["Km_from_prev_tx"] = km
+    out["Speed_kmh_from_prev_log"] = np.log1p(km / (secs.clip(lower=60) / 3600))
     for c in CATEGORIES:  # fixed list: an unseen category simply gets all zeros
         out[f"cat_{c}"] = (df["category"] == c).astype(int)
     return out[FEATURES]
@@ -113,7 +146,8 @@ def synthetic(n: int = 3000, fraud_rate: float = 0.03, seed: int = 0) -> pd.Data
     df["merchant"] = "fraud_" + df["category"] + "_" + rng.integers(0, 20, n).astype(str)
     df["merch_lat"] = df["lat"] + rng.uniform(-1, 1, n)
     df["merch_long"] = df["long"] + rng.uniform(-1, 1, n)
-    return df.sort_values("Time", kind="stable").reset_index(drop=True)[RAW_COLS + ["Class"]]
+    df = df.sort_values("Time", kind="stable").reset_index(drop=True)[FILE_COLS + ["Class"]]
+    return enrich(df)  # same state as load_transactions() output: ready to score
 
 
 SPEC = DatasetSpec(
@@ -121,9 +155,13 @@ SPEC = DatasetSpec(
     description="Sparkov simulated card transactions (2019–2020) with card, merchant, category and location.",
     raw_cols=RAW_COLS,
     features=FEATURES,
-    scale_cols=["Amount_log", "Day_of_week", "Age", "City_pop_log", "Distance_km"],
+    scale_cols=["Amount_log", "Day_of_week", "Age", "City_pop_log", "Distance_km", "Card_tx_1h",
+                "Card_tx_24h", "Card_tx_7d", "Card_amount_24h_log", "Amount_vs_card_mean",
+                "Amount_zscore_card", "Log_secs_since_prev", "Card_history_log", "Km_from_prev_tx",
+                "Speed_kmh_from_prev_log"],
     load=load,
     add_features=add_features,
     synthetic=synthetic,
     to_raw=to_raw,
+    enrich=enrich,
 )

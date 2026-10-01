@@ -6,6 +6,10 @@ Every dataset is loaded into the same canonical frame:
   - `Class`  1 = fraud, 0 = legitimate
 plus the raw columns its feature function needs (`raw_cols`). Splitting, cross-validation, the cost
 model and the dashboard only rely on the canonical columns, so they work for every dataset.
+
+Datasets with card history also define `enrich`, which adds history columns that depend only on
+earlier transactions. It runs once on the full frame, before splitting: a test transaction may use
+history from the training period, exactly as it would in production.
 """
 
 from __future__ import annotations
@@ -29,6 +33,8 @@ class DatasetSpec:
     synthetic: Callable[..., pd.DataFrame]
     # canonical frame -> the file format `load` reads (used to write synthetic CSVs)
     to_raw: Callable[[pd.DataFrame], pd.DataFrame] = lambda df: df
+    # adds point-in-time history columns computed over the whole chronological frame (see history.py)
+    enrich: Callable[[pd.DataFrame], pd.DataFrame] = lambda df: df
 
 
 def get_dataset(name: str) -> DatasetSpec:

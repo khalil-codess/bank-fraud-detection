@@ -51,7 +51,7 @@ def plot_pr_curves(y_test, probas: dict, scores: dict, path: Path) -> None:
                                                 name=f"{name} (AP={scores[name]:.2f})")
     ax.axhline(y_test.mean(), color="k", ls="--", alpha=0.4, label="Chance")
     ax.set_title("Precision-recall curves (chronological test set)")
-    ax.legend(fontsize=8)
+    ax.legend(fontsize=8, loc="lower left")  # loc="best" is very slow on large curves
     _save(fig, path)
 
 
@@ -78,7 +78,7 @@ def plot_savings_curve(y_test, proba, amount, review_cost, threshold, title, pat
     ax.set(xlabel="Number of alerts reviewed (most suspicious first)",
            ylabel="Net savings (fraud caught - review cost)",
            title=f"{title}: savings on the test set (review cost = {review_cost:g} per alert)")
-    ax.legend()
+    ax.legend(loc="upper left")
     _save(fig, path)
 
 

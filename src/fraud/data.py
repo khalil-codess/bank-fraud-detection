@@ -17,6 +17,7 @@ def load_transactions(spec: DatasetSpec, path: str | Path) -> pd.DataFrame:
     df = spec.load(Path(path))
     n_raw = len(df)
     df = df.drop_duplicates().reset_index(drop=True)
+    df = spec.enrich(df)
     log.info("Loaded %s: %s rows (%s after removing duplicates), %s frauds (%.3f%%)", spec.name,
              f"{n_raw:,}", f"{len(df):,}", int(df["Class"].sum()), df["Class"].mean() * 100)
     df.attrs["rows_raw"] = n_raw

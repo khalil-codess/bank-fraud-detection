@@ -80,7 +80,7 @@ with tab_batch:
             path = Path(tmp) / "upload.csv"
             path.write_bytes(up.getvalue())
             try:
-                raw, error = spec.load(path), None
+                raw, error = spec.enrich(spec.load(path)), None  # history = earlier rows of this file
             except (ValueError, KeyError) as exc:
                 raw, error = None, str(exc)
         if error:

@@ -81,7 +81,7 @@ def test_sparkov_features_by_hand():
         "gender": "F", "dob": "1990-03-07", "lat": 40.0, "long": -75.0, "city_pop": 999,
         "merch_lat": 40.0, "merch_long": -75.0,
     }])
-    X = sparkov.add_features(tx).iloc[0]
+    X = sparkov.add_features(sparkov.enrich(tx)).iloc[0]
     assert X["Amount_log"] == pytest.approx(np.log(100))
     assert X["Day_of_week"] == 5
     assert X["Age"] == pytest.approx(30, abs=0.01)
@@ -89,6 +89,10 @@ def test_sparkov_features_by_hand():
     assert X["Distance_km"] == pytest.approx(0)
     assert X["cat_shopping_net"] == 1
     assert X[[c for c in sparkov.FEATURES if c.startswith("cat_")]].sum() == 1
+    # a card's first transaction: neutral history features
+    assert X["Card_history_log"] == 0
+    assert X["First_time_merchant"] == 1
+    assert X["Amount_vs_card_mean"] == 1
 
 
 def test_sparkov_unseen_category_gets_no_one_hot():
