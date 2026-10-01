@@ -1,199 +1,74 @@
-<<<<<<< HEAD
-# 🔍 Détection de Fraude Bancaire — Projet ML
+# 🔍 Détection de fraude bancaire
 
-> Pipeline complet de Machine Learning pour la détection de transactions frauduleuses,
-> avec explainabilité SHAP et dashboard interactif Streamlit.
+Pipeline ML de détection de transactions frauduleuses (Kaggle *Credit Card Fraud Detection*),
+évalué de façon réaliste : split chronologique, seuil choisi hors test, intervalles de confiance,
+explicabilité SHAP et dashboard Streamlit.
 
-![Python](https://img.shields.io/badge/Python-3.8+-blue)
-![XGBoost](https://img.shields.io/badge/XGBoost-1.7+-orange)
-![Streamlit](https://img.shields.io/badge/Streamlit-1.20+-red)
-![Tests](https://img.shields.io/badge/Tests-16%20passed-green)
+## Résultats (jeu de test chronologique)
 
----
+Test : 42 558 transactions, dont **52 fraudes** seulement. Les métriques sont donc bruitées :
+l'IC 95 % de la PR-AUC du modèle retenu est **0.66 – 0.87**. Les écarts entre modèles
+ci-dessous sont **dans le bruit** ; ne pas sur-interpréter le classement.
 
-## Résultats
+| Modèle              | PR-AUC | ROC-AUC | Précision | Rappel | F1   |
+|---------------------|--------|---------|-----------|--------|------|
+| Logistic Regression | 0.694  | 0.977   | 0.972     | 0.673  | 0.795 |
+| **Random Forest** ✓ | **0.770** | 0.962 | 0.886   | 0.750  | 0.812 |
+| XGBoost             | 0.759  | 0.981   | 0.830     | 0.750  | 0.788 |
+| XGBoost + SMOTE     | 0.759  | 0.973   | 0.792     | 0.731  | 0.760 |
 
-| Modèle               | AUC-ROC | F1-Score | Precision | Recall |
-|----------------------|---------|----------|-----------|--------|
-| Logistic Regression  | 0.96    | 0.81     | 0.78      | 0.84   |
-| Random Forest        | 0.97    | 0.85     | 0.88      | 0.82   |
-| **XGBoost** ✓        | **0.98**| **0.87** | **0.91**  | **0.83**|
+Le modèle est retenu sur la **PR-AUC de validation**, et le seuil de décision est choisi sur la
+validation (max F1) : le test n'est regardé qu'une fois. Au seuil retenu : 39 fraudes détectées,
+13 manquées, 5 fausses alertes. Chiffres complets dans `artifacts/metrics.json`
+(régénérés à chaque entraînement).
 
----
+> **Correction d'une version précédente.** L'ancien README annonçait F1 0.87 / précision 0.91
+> pour XGBoost. Ces valeurs étaient écrites en dur et ne correspondaient pas aux résultats du code
+> (mesuré : précision ≈ 0.53, F1 ≈ 0.66 avec le même protocole). Elles ont été supprimées.
 
-## Présentation du projet
+## Ce qui a changé et pourquoi
 
-Ce projet traite un problème réel en finance : détecter automatiquement les transactions
-frauduleuses parmi des millions d'opérations bancaires. Le défi principal est le fort
-**déséquilibre des classes** (seulement 0.17% de fraudes), résolu avec la technique SMOTE.
+| Problème de la version initiale | Correction |
+|---|---|
+| `scaler` ajusté deux fois : `scaler.pkl` ne contenait que *Time* ; l'app codait en dur les stats d'*Amount* (décalage train/prod) | Features déterministes (`log1p(Amount)`, heure cyclique) + scaler dans un `Pipeline` sauvegardé d'un bloc |
+| Normalisation avant le split (fuite) | Scaler ajusté sur le train uniquement |
+| Split aléatoire : le modèle voit le « futur » | Split **chronologique** train/val/test |
+| 1 081 lignes dupliquées, pouvant se retrouver en train *et* test | Dédoublonnage |
+| Seuil fixe à 0.5 ; métriques choisies/évaluées sur le même test | Seuil et modèle choisis sur la validation |
+| ROC-AUC mise en avant (optimiste à 0.17 % de fraudes) | **PR-AUC** en métrique principale, IC bootstrap |
+| README/app : « XGBoost + SMOTE » alors que SMOTE n'était appliqué qu'à la régression logistique | SMOTE testé honnêtement en ablation : **il n'améliore pas** ici |
+| Métriques codées en dur dans l'app | L'app lit `artifacts/metrics.json` |
+| App : 10 sliders sur des composantes PCA anonymes, V11–V28 à 0 | Transactions réelles du test + scénario « et si » sur *Amount*/*Time* + scoring CSV |
+| Tests qui testaient sklearn/imblearn, pas le projet | 20 tests sur le vrai code (features, split sans chevauchement, seuil, pipelines, scoring) |
 
-### Ce que le projet démontre
-
-- Gestion de **données fortement déséquilibrées** (SMOTE)
-- Comparaison rigoureuse de **3 algorithmes** (LR, Random Forest, XGBoost)
-- **Explainabilité** des prédictions avec SHAP values
-- **Dashboard interactif** déployable en production avec Streamlit
-- **Tests unitaires** (16 tests, coverage complet)
-- Bonnes pratiques ML : stratified split, métriques adaptées (F1 / AUC-ROC)
-
----
-
-## Structure du projet
+## Structure
 
 ```
-fraud-detection/
-│
-├── fraud_detection.py    # Pipeline ML complet (7 étapes)
-├── app.py                # Dashboard Streamlit interactif
-├── tests.py              # Tests unitaires (16 tests)
-├── requirements.txt      # Dépendances Python
-├── README.md             # Ce fichier
-│
-├── creditcard.csv        # Dataset (à télécharger sur Kaggle)
-│
-├── fraud_model.pkl       # Modèle XGBoost sauvegardé (généré)
-├── scaler.pkl            # StandardScaler sauvegardé (généré)
-├── shap_explainer.pkl    # Explainer SHAP sauvegardé (généré)
-│
-└── outputs/              # Graphiques générés
-    ├── eda_distribution.png
-    ├── correlation_matrix.png
-    ├── smote_comparison.png
-    ├── model_comparison.png
-    ├── shap_summary.png
-    ├── shap_waterfall_fraud.png
-    └── shap_feature_importance.png
+fraud_lib.py         # features, split temporel, modèles, seuil, métriques, SHAP
+fraud_detection.py   # entraînement + évaluation + graphiques + sauvegarde
+app.py               # dashboard Streamlit (3 onglets)
+tests.py             # tests unitaires (données synthétiques)
+artifacts/           # metrics.json, demo_transactions.csv (versionnés) ; fraud_model.joblib (généré)
+outputs/             # graphiques générés
 ```
 
----
-
-## Installation et lancement
-
-### 1. Cloner le repo
-
-```bash
-git clone https://github.com/ton-username/fraud-detection.git
-cd fraud-detection
-```
-
-### 2. Installer les dépendances
+## Utilisation
 
 ```bash
 pip install -r requirements.txt
-```
-
-### 3. Télécharger le dataset
-
-Télécharger `creditcard.csv` depuis Kaggle :
-👉 https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud
-
-Placer le fichier à la racine du projet.
-
-### 4. Entraîner le modèle
-
-```bash
-python fraud_detection.py
-```
-
-Le script exécute les 7 étapes et génère :
-- Les graphiques d'analyse dans `outputs/`
-- Les fichiers `.pkl` du modèle entraîné
-
-### 5. Lancer le dashboard
-
-```bash
+# télécharger creditcard.csv : https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud
+python fraud_detection.py      # option : --beta 2 pour privilégier le rappel
+python tests.py
 streamlit run app.py
 ```
 
-Ouvrir http://localhost:8501 dans le navigateur.
+## Limites connues
 
-### 6. Lancer les tests
-
-```bash
-python tests.py
-```
-
----
-
-## Pipeline ML détaillé
-
-### Étape 1 — Exploration (EDA)
-- Distribution des classes (0.17% de fraudes)
-- Visualisation des montants et des features PCA
-- Matrice de corrélation
-
-### Étape 2 — Preprocessing
-- Normalisation de `Amount` et `Time` avec `StandardScaler`
-- Split stratifié 80/20 pour conserver le ratio de fraudes
-
-### Étape 3 — SMOTE
-- Sur-échantillonnage synthétique de la classe minoritaire (fraudes)
-- Résultat : classes parfaitement équilibrées pour l'entraînement
-
-### Étape 4 — Modélisation
-- **Logistic Regression** : baseline rapide, entraîné sur données SMOTE
-- **Random Forest** : 100 arbres, gestion native du déséquilibre
-- **XGBoost** : meilleur modèle, `scale_pos_weight` pour le déséquilibre
-
-### Étape 5 — Évaluation
-- Métriques : AUC-ROC, F1-Score, Precision, Recall
-- Courbes ROC comparatives
-- Matrices de confusion
-
-### Étape 6 — Explainabilité SHAP
-- **Summary plot** : impact global de chaque feature
-- **Waterfall plot** : explication transaction par transaction
-- **Feature importance** : top 15 features les plus discriminantes
-
-### Étape 7 — Sauvegarde
-- Export du modèle, scaler et explainer avec `joblib`
-
----
-
-## Pourquoi SMOTE plutôt que class_weight ?
-
-Avec seulement 0.17% de fraudes, un modèle naïf prédirait "normal" pour tout et
-atteindrait 99.83% d'accuracy — ce qui est inutile. SMOTE génère de nouveaux exemples
-synthétiques de fraudes en interpolant entre exemples existants, forçant le modèle à
-apprendre de véritables patterns frauduleux plutôt que de simplement ignorer la classe minoritaire.
-
-## Pourquoi AUC-ROC plutôt qu'accuracy ?
-
-L'accuracy est trompeuse sur des données déséquilibrées. L'AUC-ROC mesure la capacité
-du modèle à distinguer fraude / normal indépendamment du seuil de décision. Un AUC de
-0.98 signifie que le modèle classe correctement 98% des paires (fraude, normal).
-
----
-
-## Technologies utilisées
-
-- **pandas / numpy** — manipulation des données
-- **seaborn / matplotlib** — visualisations
-- **scikit-learn** — modèles, métriques, preprocessing
-- **XGBoost** — modèle gradient boosting
-- **imbalanced-learn** — SMOTE
-- **SHAP** — explainabilité
-- **Streamlit** — dashboard interactif
-- **joblib** — sérialisation du modèle
-
----
-
-## Ligne CV
-
-```
-Détection de fraude bancaire | Python, XGBoost, SHAP, Streamlit          2024
-- Pipeline ML sur 284K transactions avec classes déséquilibrées (SMOTE, 0.17% fraudes)
-- AUC-ROC 0.98 avec XGBoost — comparaison de 3 algorithmes (LR, RF, XGBoost)
-- Explainabilité des prédictions avec SHAP values
-- Dashboard interactif Streamlit + 16 tests unitaires
-```
-
----
-
-## Auteur
-
-Projet réalisé dans le cadre d'un portfolio ML personnel.
-=======
-# bank-fraud-detection
-ML pipeline for fraud detection with XGBoost, SHAP, and SMOTE — 0.98 AUC-ROC.
->>>>>>> cf7aceceb6747eddca74ba3b1314958530b63025
+- **52 fraudes en test** : forte incertitude. Une validation croisée par blocs temporels
+  donnerait des estimations plus stables.
+- Les features V1–V28 sont déjà une PCA anonymisée : l'ingénierie de variables métier
+  (historique par carte, vélocité, géographie) est impossible sur ce jeu.
+- Le jeu date de 2013 et couvre 2 jours : pas de test de dérive dans le temps.
+- Seuil basé sur le F1 : en production, le choisir à partir du coût réel d'une fraude manquée
+  vs. d'une fausse alerte (`--beta`).
+- `fraud_detection.ipynb` est l'ancien notebook et n'est pas aligné avec ce pipeline.

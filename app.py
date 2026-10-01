@@ -1,139 +1,122 @@
 # =============================================================================
 # DASHBOARD STREAMLIT — Détection de fraude bancaire
-# Lancer avec : streamlit run app.py
+# Lancer avec : streamlit run app.py   (après python fraud_detection.py)
 # =============================================================================
 
-import streamlit as st
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import shap
+import json
+from pathlib import Path
+
 import joblib
+import matplotlib.pyplot as plt
+import pandas as pd
+import shap
+import streamlit as st
 
-# ── Configuration de la page ─────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Détecteur de Fraude Bancaire",
-    page_icon="🔍",
-    layout="wide"
-)
+import fraud_lib as fl
 
-st.title("🔍 Détecteur de Fraude Bancaire")
-st.markdown("Projet ML — XGBoost + SHAP Explainability")
-st.divider()
+ART, OUT = Path('artifacts'), Path('outputs')
 
-# ── Chargement du modèle ─────────────────────────────────────────────────────
+st.set_page_config(page_title="Détecteur de Fraude Bancaire", page_icon="🔍", layout="wide")
+
+
 @st.cache_resource
-def load_model():
-    model = joblib.load('fraud_model.pkl')
-    explainer = joblib.load('shap_explainer.pkl')
-    return model, explainer
+def load_artifacts():
+    model = joblib.load(ART / 'fraud_model.joblib')
+    metrics = json.loads((ART / 'metrics.json').read_text(encoding='utf-8'))
+    demo = pd.read_csv(ART / 'demo_transactions.csv')
+    return model, metrics, demo
+
 
 try:
-    model, explainer = load_model()
-    st.success("✓ Modèle chargé avec succès")
-except:
-    st.error("Modèle introuvable. Lance d'abord fraud_detection.py pour entraîner et sauvegarder le modèle.")
+    model, metrics, demo = load_artifacts()
+except FileNotFoundError:
+    st.error("Artefacts introuvables. Lance d'abord `python fraud_detection.py`.")
     st.stop()
 
-# ── Layout : 2 colonnes ──────────────────────────────────────────────────────
-col1, col2 = st.columns([1, 1.5])
+threshold = metrics['threshold']
+test_m = metrics['models'][metrics['selected_model']]['test']
 
-with col1:
-    st.subheader("Entrer une transaction")
-    st.markdown("Ajuste les valeurs des features pour simuler une transaction.")
+st.title("🔍 Détecteur de Fraude Bancaire")
+st.caption(f"Modèle : {metrics['selected_model']} · seuil de décision : {threshold:.3f} "
+           f"(choisi sur la validation, pas sur le test)")
 
-    # Inputs pour les features les plus importantes
-    time_val = st.slider("Time (secondes depuis début)", 0, 172792, 50000)
-    amount_val = st.number_input("Montant (€)", min_value=0.0, max_value=25000.0, value=150.0, step=10.0)
+tab_demo, tab_batch, tab_perf = st.tabs(["Transaction réelle", "Scorer un fichier CSV", "Performances"])
 
-    st.markdown("**Features PCA (V1–V10) :**")
-    cols = st.columns(2)
-    features = {}
-    for i in range(1, 29):
-        col_idx = (i - 1) % 2
-        with cols[col_idx] if i <= 10 else st.container():
-            if i <= 10:
-                features[f'V{i}'] = cols[col_idx].slider(
-                    f"V{i}", -5.0, 5.0, 0.0, step=0.1, key=f'v{i}'
-                )
-            else:
-                features[f'V{i}'] = 0.0  # Valeurs par défaut pour V11-V28
+# ── Onglet 1 : transactions réelles du jeu de test + what-if ─────────────────
+with tab_demo:
+    col_in, col_out = st.columns([1, 1.5])
+    with col_in:
+        kind = st.radio("Type de transaction", ["Fraude réelle", "Normale réelle"], horizontal=True)
+        pool = demo[demo['Class'] == (1 if kind == "Fraude réelle" else 0)].reset_index(drop=True)
+        idx = st.number_input(f"Exemple (0–{len(pool) - 1})", 0, len(pool) - 1, 0)
+        tx = pool.iloc[[int(idx)]].copy()
 
-    # Bouton de prédiction
-    predict_btn = st.button("Analyser la transaction", type="primary", use_container_width=True)
+        st.markdown("**Scénario « et si… » sur les variables lisibles**")
+        tx['Amount'] = st.number_input("Montant", 0.0, 30000.0, float(tx['Amount'].iloc[0]), step=10.0)
+        tx['Time'] = st.slider("Time (s depuis la 1re transaction)", 0, 172800, int(tx['Time'].iloc[0]))
+        st.caption("V1–V28 sont des composantes PCA anonymisées : elles sont gardées telles quelles.")
 
-with col2:
-    st.subheader("Résultat de l'analyse")
-
-    if predict_btn:
-        # Construire le vecteur de features
-        feature_names = [f'V{i}' for i in range(1, 29)] + ['Amount_scaled', 'Time_scaled']
-
-        # Normaliser Amount et Time (approximation simple pour la démo)
-        amount_scaled = (amount_val - 88.35) / 250.12
-        time_scaled = (time_val - 94813) / 47488
-
-        input_dict = {**features, 'Amount_scaled': amount_scaled, 'Time_scaled': time_scaled}
-        input_df = pd.DataFrame([input_dict])[feature_names]
-
-        # Prédiction
-        prediction = model.predict(input_df)[0]
-        proba = model.predict_proba(input_df)[0]
-        fraud_proba = proba[1]
-        normal_proba = proba[0]
-
-        # Affichage du résultat
-        if prediction == 1:
-            st.error(f"🚨 FRAUDE DÉTECTÉE")
-            st.metric("Probabilité de fraude", f"{fraud_proba*100:.1f}%")
+    with col_out:
+        res = fl.score_transactions(model, threshold, tx).iloc[0]
+        label = "Fraude" if int(pool.iloc[int(idx)]['Class']) else "Normale"
+        if res['is_fraud']:
+            st.error("🚨 Transaction signalée comme FRAUDE")
         else:
-            st.success(f"✅ TRANSACTION NORMALE")
-            st.metric("Probabilité de fraude", f"{fraud_proba*100:.1f}%")
+            st.success("✅ Transaction jugée normale")
+        c1, c2 = st.columns(2)
+        c1.metric("Score de fraude", f"{res['fraud_proba'] * 100:.1f} %")
+        c2.metric("Étiquette réelle", label)
 
-        # Barre de confiance
-        st.progress(float(fraud_proba))
-        st.caption(f"Normal: {normal_proba*100:.1f}% | Fraude: {fraud_proba*100:.1f}%")
-
-        st.divider()
-
-        # ── SHAP Explainability ──────────────────────────────────────────────
-        st.subheader("Pourquoi cette décision ?")
-        st.caption("Les features en rouge augmentent le risque de fraude, en bleu le réduisent.")
-
-        shap_vals = explainer.shap_values(input_df)
-
-        fig, ax = plt.subplots(figsize=(8, 5))
-        shap.waterfall_plot(
-            shap.Explanation(
-                values=shap_vals[0],
-                base_values=explainer.expected_value,
-                data=input_df.values[0],
-                feature_names=feature_names
-            ),
-            max_display=12,
-            show=False
-        )
+        st.subheader("Pourquoi ce score ?")
+        st.caption("Rouge : pousse vers la fraude · bleu : pousse vers normal.")
+        fig = plt.figure()
+        shap.waterfall_plot(fl.explain(model, tx)[0], max_display=12, show=False)
         st.pyplot(fig)
-        plt.close()
+        plt.close(fig)
 
-    else:
-        st.info("Ajuste les paramètres à gauche et clique sur **Analyser** pour voir la prédiction.")
+# ── Onglet 2 : scoring par lot ───────────────────────────────────────────────
+with tab_batch:
+    st.markdown(f"Charge un CSV au format Kaggle (colonnes : {', '.join(fl.RAW_COLS[:3])}, …, Time, Amount).")
+    up = st.file_uploader("Fichier CSV", type="csv")
+    if up is not None:
+        raw = pd.read_csv(up)
+        missing = [c for c in fl.RAW_COLS if c not in raw.columns]
+        if missing:
+            st.error(f"Colonnes manquantes : {', '.join(missing)}")
+        else:
+            scored = pd.concat([raw, fl.score_transactions(model, threshold, raw)], axis=1)
+            flagged = scored[scored['is_fraud']].sort_values('fraud_proba', ascending=False)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Transactions", f"{len(scored):,}")
+            c2.metric("Signalées", f"{len(flagged):,}")
+            c3.metric("Taux de signalement", f"{len(flagged) / len(scored) * 100:.2f} %")
+            st.dataframe(flagged[['fraud_proba', 'Time', 'Amount']].head(200), use_container_width=True)
+            st.download_button("Télécharger le CSV scoré", scored.to_csv(index=False).encode(),
+                               "transactions_scorees.csv", "text/csv")
 
-        # Afficher les métriques du modèle
-        st.subheader("Performances du modèle")
-        metrics_col1, metrics_col2, metrics_col3, metrics_col4 = st.columns(4)
-        metrics_col1.metric("AUC-ROC", "0.98")
-        metrics_col2.metric("F1-Score", "0.87")
-        metrics_col3.metric("Precision", "0.91")
-        metrics_col4.metric("Recall", "0.83")
+# ── Onglet 3 : performances réelles (lues depuis metrics.json) ───────────────
+with tab_perf:
+    d = metrics['data']
+    st.markdown(
+        f"Évaluation sur un **test chronologique** de {d['test']['rows']:,} transactions "
+        f"dont seulement **{d['test']['frauds']} fraudes** (le CSV dédoublonné compte "
+        f"{d['rows_dedup']:,} lignes sur {d['rows_raw']:,})."
+    )
+    lo, hi = metrics['test_pr_auc_ci95']
+    c = st.columns(5)
+    c[0].metric("PR-AUC", f"{test_m['pr_auc']:.2f}", help=f"IC 95 % bootstrap : {lo:.2f} – {hi:.2f}")
+    c[1].metric("ROC-AUC", f"{test_m['roc_auc']:.2f}")
+    c[2].metric("Précision", f"{test_m['precision']:.2f}")
+    c[3].metric("Rappel", f"{test_m['recall']:.2f}")
+    c[4].metric("F1", f"{test_m['f1']:.2f}")
+    st.caption(f"Au seuil retenu : {test_m['tp']} fraudes détectées, {test_m['fn']} manquées, "
+               f"{test_m['fp']} fausses alertes. IC 95 % de la PR-AUC : {lo:.2f} – {hi:.2f}.")
 
-        st.markdown("""
-        **À propos du modèle :**
-        - Dataset : 284,807 transactions (492 fraudes)
-        - Technique : XGBoost + SMOTE pour le déséquilibre des classes
-        - Explainabilité : SHAP values pour chaque prédiction
-        """)
+    rows = [{'Modèle': n, 'PR-AUC': m['test']['pr_auc'], 'ROC-AUC': m['test']['roc_auc'],
+             'Précision': m['test']['precision'], 'Rappel': m['test']['recall'], 'F1': m['test']['f1']}
+            for n, m in metrics['models'].items()]
+    st.dataframe(pd.DataFrame(rows).round(3), hide_index=True, use_container_width=True)
 
-# ── Footer ────────────────────────────────────────────────────────────────────
-st.divider()
-st.caption("Projet ML — Détection de fraude bancaire | XGBoost + SHAP + Streamlit")
+    for img in ['pr_curves.png', 'shap_summary.png']:
+        if (OUT / img).exists():
+            st.image(str(OUT / img))
