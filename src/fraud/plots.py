@@ -8,8 +8,10 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
 from sklearn.metrics import ConfusionMatrixDisplay, PrecisionRecallDisplay  # noqa: E402
 
+from fraud.evaluate import savings_curve  # noqa: E402
 from fraud.inference import explain  # noqa: E402
 
 COLORS = {0: "#4C9BE8", 1: "#E85C4C"}
@@ -56,6 +58,43 @@ def plot_confusion(y_test, pred, title: str, path: Path) -> None:
     ConfusionMatrixDisplay.from_predictions(y_test, pred, display_labels=[LABELS[0], LABELS[1]],
                                             ax=ax, cmap="Blues", colorbar=False)
     ax.set_title(title)
+    _save(fig, path)
+
+
+def plot_savings_curve(y_test, proba, amount, review_cost, threshold, title, path: Path) -> None:
+    """Net savings as the number of alerts grows; the marker is the threshold chosen on validation."""
+    _, n_alerts, savings = savings_curve(y_test, proba, amount, review_cost)
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    ax.plot(n_alerts, savings, color=COLORS[0])
+    chosen = int((np.asarray(proba) >= threshold).sum())
+    if chosen:
+        ax.axvline(chosen, color=COLORS[1], ls="--", label=f"Chosen threshold: {chosen} alerts")
+    ax.axhline(0, color="k", lw=0.8, alpha=0.5)
+    ax.set_xscale("log")
+    best = max(float(np.max(savings)), 1.0)
+    ax.set_ylim(-best, best * 1.2)  # flagging everything loses a fortune; zoom on the useful range
+    ax.set(xlabel="Number of alerts reviewed (most suspicious first)",
+           ylabel="Net savings (fraud caught - review cost)",
+           title=f"{title}: savings on the test set (review cost = {review_cost:g} per alert)")
+    ax.legend()
+    _save(fig, path)
+
+
+def plot_cv(cv: dict, path: Path) -> None:
+    """Mean ± std across time-series CV folds for each model."""
+    names = [n for n, r in cv.items() if r]
+    metrics = [("pr_auc", "PR-AUC"), ("savings_rate", "Savings rate"), ("recall", "Recall")]
+    fig, axes = plt.subplots(1, len(metrics), figsize=(15, 4), sharey=False)
+    for ax, (key, label) in zip(axes, metrics, strict=True):
+        means = [cv[n][key]["mean"] for n in names]
+        stds = [cv[n][key]["std"] for n in names]
+        ax.barh(names, means, xerr=stds, color=COLORS[0], alpha=0.85, capsize=4)
+        ax.set(title=label, xlim=(min(0, min(means) - 0.1), 1))
+        ax.invert_yaxis()
+    for ax in axes[1:]:
+        ax.set_yticklabels([])
+    fig.suptitle(f"Time-series cross-validation ({len(cv[names[0]]['folds'])} folds, mean ± std)")
+    fig.tight_layout()
     _save(fig, path)
 
 

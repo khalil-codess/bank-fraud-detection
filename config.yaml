@@ -11,7 +11,18 @@ split:            # chronological: train | validation | test
   test_frac: 0.15
 
 threshold:
-  beta: 1.0       # F-beta maximised on validation; >1 favours recall
+  method: cost    # cost: maximise savings | fbeta: maximise F-beta
+  beta: 1.0       # only used by method: fbeta; >1 favours recall
+
+costs:
+  review_cost: 5.0  # cost of investigating one alert, in the currency of Amount.
+                    # A missed fraud costs its full amount.
+
+evaluation:
+  cv_folds: 4                     # rolling time-series folds inside train+validation; 0 = off
+  cv_fold_frac: 0.1               # size of each CV test block (share of train+validation)
+  selection_metric: savings_rate  # CV mean used to pick the model: savings_rate | pr_auc
+  alert_budgets_per_day: [50, 100, 200]  # precision@k / recall@k for these review capacities
 
 explain:
   shap: true

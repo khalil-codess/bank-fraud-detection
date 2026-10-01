@@ -1,12 +1,14 @@
 """Train, compare and save fraud models.
 
-Usage: python -m fraud.train [--config config.yaml] [--data PATH] [--beta 2] [--no-shap]
+Usage: python -m fraud.train [--config config.yaml] [--data PATH] [--no-cv] [--no-shap]
 
 Method:
   - exact duplicate rows are removed
-  - chronological train / validation / test split (no information from the future)
-  - the model AND the decision threshold are chosen on validation only
-  - the test set is evaluated once, with a bootstrap confidence interval
+  - chronological split: train | validation | test
+  - models are compared by rolling time-series cross-validation inside train+validation
+  - the final model is fitted on train; its decision threshold is chosen on validation
+    (by default, the threshold that maximises savings under the cost model)
+  - the test set is evaluated once, with bootstrap confidence intervals
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,9 +26,10 @@ import pandas as pd
 from fraud import __version__, plots
 from fraud.config import Config, load_config
 from fraud.data import load_transactions, time_split
-from fraud.evaluate import bootstrap_ci, evaluate, select_threshold
+from fraud.evaluate import at_k, bootstrap_ci, evaluate, paired_bootstrap
 from fraud.features import FEATURES, RAW_COLS, add_features
 from fraud.models import TREE_MODELS, build_models
+from fraud.validation import cross_validate, pick_threshold
 
 log = logging.getLogger("fraud.train")
 
@@ -41,6 +45,12 @@ def run(cfg: Config) -> dict:
     for name, part in (("train", train), ("val", val), ("test", test)):
         log.info("%-5s %8s rows, %4d frauds", name, f"{len(part):,}", int(part["Class"].sum()))
 
+    # ── 1. Model comparison by time-series CV (the test set is not touched) ──
+    cv = cross_validate(pd.concat([train, val]), cfg) if cfg.cv_folds > 0 else {}
+    if cv:
+        _log_cv(cv, cfg.selection_metric)
+
+    # ── 2. Fit every model on train, threshold on validation, score test ─────
     X_train, y_train = add_features(train), train["Class"]
     X_val, y_val = add_features(val), val["Class"]
     X_test, y_test = add_features(test), test["Class"]
@@ -48,32 +58,48 @@ def run(cfg: Config) -> dict:
     models = build_models(y_train, cfg.models, seed=cfg.seed)
     report, test_probas = {}, {}
     for name, model in models.items():
-        log.info("Training %s", name)
+        log.info("Training %s on the full training window", name)
         model.fit(X_train, y_train)
         p_val = model.predict_proba(X_val)[:, 1]
-        threshold = select_threshold(y_val, p_val, beta=cfg.beta)
+        threshold = pick_threshold(y_val, p_val, val["Amount"], cfg)
         test_probas[name] = model.predict_proba(X_test)[:, 1]
-        report[name] = {"val": evaluate(y_val, p_val, threshold),
-                        "test": evaluate(y_test, test_probas[name], threshold)}
-        t = report[name]["test"]
-        log.info("  val PR-AUC %.3f | threshold %.3f | test PR-AUC %.3f P %.3f R %.3f F1 %.3f",
-                 report[name]["val"]["pr_auc"], threshold, t["pr_auc"],
-                 t["precision"], t["recall"], t["f1"])
+        report[name] = {
+            "val": evaluate(y_val, p_val, threshold, val["Amount"], cfg.review_cost),
+            "test": evaluate(y_test, test_probas[name], threshold, test["Amount"], cfg.review_cost),
+        }
 
-    best = max(report, key=lambda n: report[n]["val"]["pr_auc"])
+    # ── 3. Select (CV if available, else validation) and report on test ─────
+    if cv and all(cv[n] for n in report):
+        best = max(report, key=lambda n: cv[n][cfg.selection_metric]["mean"])
+        selected_by = f"cv mean {cfg.selection_metric}"
+    else:
+        best = max(report, key=lambda n: report[n]["val"]["pr_auc"])
+        selected_by = "validation pr_auc"
     best_model, threshold = models[best], report[best]["val"]["threshold"]
-    ci = bootstrap_ci(y_test, test_probas[best])
-    log.info("Selected model (best validation PR-AUC): %s; test PR-AUC %.3f [95%% CI %.3f-%.3f]",
-             best, report[best]["test"]["pr_auc"], ci[0], ci[1])
+    p_best = test_probas[best]
+    ci = bootstrap_ci(y_test, p_best)
+    log.info("Selected model (%s): %s; test PR-AUC %.3f [95%% CI %.3f-%.3f]",
+             selected_by, best, report[best]["test"]["pr_auc"], ci[0], ci[1])
 
+    span_days = max((test["Time"].max() - test["Time"].min()) / 86_400, 1 / 24)
+    budgets = {str(b): at_k(y_test, p_best, round(b * span_days)) for b in cfg.alert_budgets_per_day}
+    comparisons = {other: paired_bootstrap(y_test, p_best, test_probas[other])
+                   for other in report if other != best}
+
+    # ── 4. Figures ──────────────────────────────────────────────────────────
     plots.plot_pr_curves(y_test, test_probas, {n: r["test"]["pr_auc"] for n, r in report.items()},
                          cfg.outputs_dir / "pr_curves.png")
-    plots.plot_confusion(y_test, (test_probas[best] >= threshold).astype(int),
+    plots.plot_confusion(y_test, (p_best >= threshold).astype(int),
                          f"{best}\nthreshold = {threshold:.3f}", cfg.outputs_dir / "confusion_matrix.png")
+    plots.plot_savings_curve(y_test, p_best, test["Amount"], cfg.review_cost, threshold, best,
+                             cfg.outputs_dir / "savings_curve.png")
+    if cv:
+        plots.plot_cv(cv, cfg.outputs_dir / "cv_results.png")
     if cfg.shap and isinstance(best_model.named_steps["clf"], TREE_MODELS):
         log.info("Computing SHAP explanations")
         plots.plot_shap(best_model, test, cfg.outputs_dir, cfg.shap_sample, cfg.seed)
 
+    # ── 5. Artifacts ────────────────────────────────────────────────────────
     joblib.dump(best_model, cfg.artifacts_dir / "fraud_model.joblib")
     # Real test transactions for the dashboard demo: every fraud + up to 300 legitimate ones
     legit = test[test["Class"] == 0]
@@ -85,29 +111,52 @@ def run(cfg: Config) -> dict:
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "version": __version__,
         "selected_model": best,
+        "selected_by": selected_by,
         "threshold": threshold,
+        "threshold_method": cfg.threshold_method,
         "beta": cfg.beta,
+        "review_cost": cfg.review_cost,
         "features": FEATURES,
         "data": {
             "rows_raw": df.attrs["rows_raw"], "rows_dedup": len(df),
             **{name: {"rows": len(part), "frauds": int(part["Class"].sum())}
                for name, part in (("train", train), ("val", val), ("test", test))},
+            "test_span_days": span_days,
         },
         "test_pr_auc_ci95": ci,
+        "alert_budgets": budgets,
+        "paired_bootstrap_pr_auc": comparisons,
+        "cv": cv,
         "models": report,
     }
     (cfg.artifacts_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-    _print_summary(report, best)
+    _log_summary(report, best, budgets, comparisons)
     return metrics
 
 
-def _print_summary(report: dict, best: str) -> None:
-    lines = [f"{'Model (test set)':22s} {'PR-AUC':>7s} {'ROC-AUC':>8s} {'Prec':>6s} "
-             f"{'Recall':>7s} {'F1':>6s}"]
+def _log_cv(cv: dict, selection_metric: str) -> None:
+    lines = [f"{'Model (CV mean ± std)':22s} {'PR-AUC':>15s} {'Savings rate':>15s} {'Recall':>15s}"]
+    for name, r in cv.items():
+        if r:
+            lines.append(f"{name:22s} " + " ".join(
+                f"{r[m]['mean']:8.3f} ± {r[m]['std']:.3f}" for m in ("pr_auc", "savings_rate", "recall")))
+    log.info("Cross-validation (selection by %s)\n%s", selection_metric, "\n".join(lines))
+
+
+def _log_summary(report: dict, best: str, budgets: dict, comparisons: dict) -> None:
+    lines = [f"{'Model (test set)':22s} {'PR-AUC':>7s} {'Prec':>6s} {'Recall':>7s} "
+             f"{'Alerts':>7s} {'Savings':>10s} {'Rate':>6s}"]
     for name, r in report.items():
         t = r["test"]
-        lines.append(f"{name:22s} {t['pr_auc']:7.3f} {t['roc_auc']:8.3f} {t['precision']:6.3f} "
-                     f"{t['recall']:7.3f} {t['f1']:6.3f}{'  <- selected' if name == best else ''}")
+        lines.append(f"{name:22s} {t['pr_auc']:7.3f} {t['precision']:6.3f} {t['recall']:7.3f} "
+                     f"{t['n_alerts']:7d} {t['savings']:10,.0f} {t['savings_rate']:6.1%}"
+                     f"{'  <- selected' if name == best else ''}")
+    lines.append("\nAlert budget (per day) -> precision / recall of the selected model:")
+    lines += [f"  {b:>4s}/day (top {r['k']}): {r['precision']:.2f} / {r['recall']:.2f}"
+              for b, r in budgets.items()]
+    lines.append("\nPaired bootstrap, PR-AUC of the selected model minus:")
+    lines += [f"  {o:22s} {c['diff']:+.3f}  95% CI [{c['ci95'][0]:+.3f}, {c['ci95'][1]:+.3f}]  "
+              f"P(better) = {c['p_a_better']:.2f}" for o, c in comparisons.items()]
     log.info("Results\n%s", "\n".join(lines))
 
 
@@ -117,15 +166,22 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--data", type=Path, help="override paths.data")
     ap.add_argument("--artifacts", type=Path, help="override paths.artifacts")
     ap.add_argument("--outputs", type=Path, help="override paths.outputs")
-    ap.add_argument("--beta", type=float, help="F-beta used to pick the threshold")
+    ap.add_argument("--threshold-method", choices=["cost", "fbeta"])
+    ap.add_argument("--beta", type=float, help="F-beta for --threshold-method fbeta")
+    ap.add_argument("--review-cost", type=float, help="cost of investigating one alert")
+    ap.add_argument("--no-cv", action="store_true", help="skip cross-validation (faster)")
     ap.add_argument("--no-shap", action="store_true")
     args = ap.parse_args(argv)
 
+    for stream in (sys.stdout, sys.stderr):  # Windows consoles default to cp1252
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                         datefmt="%H:%M:%S")
     cfg = load_config(args.config).with_overrides(
         data_path=args.data, artifacts_dir=args.artifacts, outputs_dir=args.outputs,
-        beta=args.beta, shap=False if args.no_shap else None)
+        threshold_method=args.threshold_method, beta=args.beta, review_cost=args.review_cost,
+        cv_folds=0 if args.no_cv else None, shap=False if args.no_shap else None)
     run(cfg)
 
 

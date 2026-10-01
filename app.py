@@ -83,7 +83,7 @@ with tab_batch:
             c1.metric("Transactions", f"{len(scored):,}")
             c2.metric("Flagged", f"{len(flagged):,}")
             c3.metric("Flag rate", f"{len(flagged) / len(scored) * 100:.2f} %")
-            st.dataframe(flagged[["fraud_proba", "Time", "Amount"]].head(200), use_container_width=True)
+            st.dataframe(flagged[["fraud_proba", "Time", "Amount"]].head(200), width="stretch")
             st.download_button("Download scored CSV", scored.to_csv(index=False).encode(),
                                "scored_transactions.csv", "text/csv")
 
@@ -105,11 +105,36 @@ with tab_perf:
     st.caption(f"At the selected threshold: {test_m['tp']} frauds caught, {test_m['fn']} missed, "
                f"{test_m['fp']} false alarms. 95% CI of PR-AUC: {lo:.2f} – {hi:.2f}.")
 
-    rows = [{"Model": n, "PR-AUC": m["test"]["pr_auc"], "ROC-AUC": m["test"]["roc_auc"],
-             "Precision": m["test"]["precision"], "Recall": m["test"]["recall"], "F1": m["test"]["f1"]}
-            for n, m in metrics["models"].items()]
-    st.dataframe(pd.DataFrame(rows).round(3), hide_index=True, use_container_width=True)
+    st.subheader("Business impact")
+    st.markdown(f"Cost model: a missed fraud costs its amount; reviewing an alert costs "
+                f"**{metrics['review_cost']:g}**. The threshold maximises net savings on validation data.")
+    c = st.columns(4)
+    c[0].metric("Fraud amount in test", f"{test_m['fraud_amount_total']:,.0f}")
+    c[1].metric("Caught", f"{test_m['fraud_amount_caught']:,.0f}")
+    c[2].metric("Review cost", f"{test_m['review_cost_total']:,.0f}", help=f"{test_m['n_alerts']} alerts")
+    c[3].metric("Net savings", f"{test_m['savings']:,.0f}", f"{test_m['savings_rate']:.0%} of fraud losses")
 
-    for img in ("pr_curves.png", "shap_summary.png"):
+    st.markdown("**If analysts can only review a fixed number of alerts per day**")
+    st.dataframe(pd.DataFrame([{"Alerts / day": b, "Top-k in test": r["k"], "Precision": r["precision"],
+                                "Recall": r["recall"], "Frauds caught": r["frauds_caught"]}
+                               for b, r in metrics["alert_budgets"].items()]).round(2),
+                 hide_index=True, width="stretch")
+
+    st.subheader("Model comparison")
+    st.caption(f"Selected by {metrics['selected_by']}. Cross-validation = rolling time-series folds "
+               "before the test period; test = the held-out final period.")
+    def cv_cell(model, metric, fmt):
+        r = metrics.get("cv", {}).get(model)
+        return f"{r[metric]['mean']:{fmt}} ± {r[metric]['std']:{fmt}}" if r else "–"
+
+    rows = [{"Model": n,
+             "CV PR-AUC": cv_cell(n, "pr_auc", ".3f"),
+             "CV savings rate": cv_cell(n, "savings_rate", ".1%"),
+             "Test PR-AUC": round(m["test"]["pr_auc"], 3), "Test precision": round(m["test"]["precision"], 3),
+             "Test recall": round(m["test"]["recall"], 3), "Test savings": round(m["test"]["savings"])}
+            for n, m in metrics["models"].items()]
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+
+    for img in ("savings_curve.png", "cv_results.png", "pr_curves.png", "shap_summary.png"):
         if (OUT / img).exists():
             st.image(str(OUT / img))
