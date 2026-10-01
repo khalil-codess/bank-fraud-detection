@@ -15,7 +15,7 @@ history from the training period, exactly as it would in production.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
@@ -35,6 +35,9 @@ class DatasetSpec:
     to_raw: Callable[[pd.DataFrame], pd.DataFrame] = lambda df: df
     # adds point-in-time history columns computed over the whole chronological frame (see history.py)
     enrich: Callable[[pd.DataFrame], pd.DataFrame] = lambda df: df
+    # reason codes (see reasons.py): feature -> reason group, and (group, raw row, feature row) -> text
+    reason_groups: dict = field(default_factory=dict)
+    describe: Callable[[str, pd.Series, pd.Series], str] = lambda group, raw, feats: group
 
 
 def get_dataset(name: str) -> DatasetSpec:

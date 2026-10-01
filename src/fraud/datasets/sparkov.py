@@ -122,6 +122,91 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     return out[FEATURES]
 
 
+CATEGORY_LABELS = {
+    "entertainment": "entertainment", "food_dining": "food & dining", "gas_transport": "gas & transport",
+    "grocery_net": "groceries (online)", "grocery_pos": "groceries (in store)",
+    "health_fitness": "health & fitness", "home": "home", "kids_pets": "kids & pets",
+    "misc_net": "miscellaneous (online)", "misc_pos": "miscellaneous (in store)",
+    "personal_care": "personal care", "shopping_net": "shopping (online)",
+    "shopping_pos": "shopping (in store)", "travel": "travel",
+}
+REASON_GROUPS = {
+    "Amount_log": "amount", "Amount_vs_card_mean": "amount_vs_usual", "Amount_zscore_card": "amount_vs_usual",
+    "Hour_sin": "time_of_day", "Hour_cos": "time_of_day", "Day_of_week": "weekday",
+    "Card_amount_24h_log": "spend_24h", "Card_tx_1h": "velocity", "Card_tx_24h": "velocity",
+    "Card_tx_7d": "velocity", "Log_secs_since_prev": "recency", "Card_history_log": "card_history",
+    "First_time_merchant": "new_merchant", "Card_category_share": "category_habit",
+    "Km_from_prev_tx": "travel", "Speed_kmh_from_prev_log": "travel", "Distance_km": "home_distance",
+    "Age": "cardholder_age", "Gender_M": "cardholder_gender", "City_pop_log": "city_size",
+    **{f"cat_{c}": "category" for c in CATEGORIES},
+}
+
+
+def _duration(seconds: float) -> str:
+    if seconds < 3600:
+        return f"{seconds / 60:.0f} min"
+    if seconds < 86_400:
+        return f"{seconds / 3600:.1f} h"
+    return f"{seconds / 86_400:.1f} days"
+
+
+def describe(group: str, raw: pd.Series, feats: pd.Series) -> str:
+    """Plain-language reason for one reason group, built from the transaction's own values."""
+    n = int(raw["hist_n"])
+    if group == "amount":
+        return f"Amount {raw['Amount']:,.2f} USD"
+    if group == "amount_vs_usual":
+        if n == 0:
+            return "No earlier purchases on this card to compare the amount with"
+        ratio, mean = feats["Amount_vs_card_mean"], raw["hist_mean"]
+        return f"Amount is {ratio:.1f}x this card's average ({mean:,.2f} USD)"
+    if group == "time_of_day":
+        ts = timestamps(raw["Time"])
+        night = " (night)" if ts.hour >= 22 or ts.hour < 6 else ""
+        return f"Made at {ts:%H:%M}{night}"
+    if group == "weekday":
+        return f"Made on a {timestamps(raw['Time']):%A}"
+    if group == "category":
+        return f"Merchant category: {CATEGORY_LABELS.get(raw['category'], raw['category'])}"
+    if group == "category_habit":
+        if n == 0:
+            return "First purchase seen on this card"
+        label = CATEGORY_LABELS.get(raw["category"], raw["category"])
+        return f"{feats['Card_category_share']:.0%} of this card's earlier purchases were in {label}"
+    if group == "spend_24h":
+        if raw["hist_amount_24h"] <= 0:
+            return "No other spending on this card in the previous 24 h"
+        return f"Card spent {raw['hist_amount_24h']:,.2f} USD in the previous 24 h"
+    if group == "velocity":
+        return (f"{int(raw['hist_n_1h'])} other transactions on this card in the previous hour, "
+                f"{int(raw['hist_n_24h'])} in 24 h, {int(raw['hist_n_7d'])} in 7 days")
+    if group == "recency":
+        if pd.isna(raw["hist_secs_since_prev"]):
+            return "First transaction seen on this card"
+        return f"Previous transaction on this card {_duration(raw['hist_secs_since_prev'])} earlier"
+    if group == "card_history":
+        return f"Card has {n:,} earlier transactions" if n else "No earlier transactions on this card"
+    if group == "new_merchant":
+        merchant = str(raw["merchant"]).removeprefix("fraud_")  # every Sparkov merchant has this prefix
+        if raw["hist_merchant_n"] == 0:
+            return f"First purchase at {merchant}"
+        return f"Card used {merchant} {int(raw['hist_merchant_n'])} times before"
+    if group == "travel":
+        if pd.isna(raw["hist_prev_lat"]):
+            return "No previous purchase location for this card"
+        speed = np.expm1(feats["Speed_kmh_from_prev_log"])
+        return f"{feats['Km_from_prev_tx']:,.0f} km from the previous purchase ({speed:,.0f} km/h)"
+    if group == "home_distance":
+        return f"Merchant is {feats['Distance_km']:,.0f} km from the cardholder's home"
+    if group == "cardholder_age":
+        return f"Cardholder age {feats['Age']:.0f}"
+    if group == "cardholder_gender":
+        return f"Cardholder gender {raw['gender']}"
+    if group == "city_size":
+        return f"Cardholder's city has {int(raw['city_pop']):,} inhabitants"
+    return group
+
+
 def synthetic(n: int = 3000, fraud_rate: float = 0.03, seed: int = 0) -> pd.DataFrame:
     """Transactions in the Sparkov schema. Frauds are larger, at night and in online categories."""
     rng = np.random.default_rng(seed)
@@ -164,4 +249,6 @@ SPEC = DatasetSpec(
     synthetic=synthetic,
     to_raw=to_raw,
     enrich=enrich,
+    reason_groups=REASON_GROUPS,
+    describe=describe,
 )

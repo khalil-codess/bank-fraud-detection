@@ -9,6 +9,7 @@ import shap
 import streamlit as st
 
 from fraud.inference import explain, load_artifacts, score_transactions
+from fraud.reasons import format_reasons, reason_codes
 
 st.set_page_config(page_title="Bank Fraud Detector", page_icon="🔍", layout="wide")
 
@@ -70,13 +71,22 @@ with tab_demo:
         c3.metric("True label", "Fraud" if int(pool.iloc[idx]["Class"]) else "Legitimate")
         st.caption(f"Decision: {rule_text}.")
 
-        st.subheader("Why this score?")
-        st.caption("SHAP values on the model's raw log-odds score. "
-                   "Red pushes towards fraud, blue towards legitimate.")
-        fig = plt.figure()
-        shap.waterfall_plot(explain(model, tx, spec)[0], max_display=12, show=False)
-        st.pyplot(fig)
-        plt.close(fig)
+        st.subheader("Why it was flagged" if res["is_fraud"] else "What raises the risk")
+        reasons = reason_codes(model, tx, spec, top_k=3)[0]
+        if reasons:
+            st.markdown("\n".join(f"{i}. **{r['text']}** (impact +{r['impact']:.2f})"
+                                  for i, r in enumerate(reasons, 1)))
+            st.caption("Impact = contribution to the model's log-odds score (SHAP), summed per reason.")
+        else:
+            st.markdown("Nothing in this transaction raises the risk above the baseline.")
+
+        with st.expander("Full SHAP breakdown"):
+            st.caption("SHAP values on the model's raw log-odds score. "
+                       "Red pushes towards fraud, blue towards legitimate.")
+            fig = plt.figure()
+            shap.waterfall_plot(explain(model, tx, spec)[0], max_display=12, show=False)
+            st.pyplot(fig)
+            plt.close(fig)
 
 # ── Tab 2: batch scoring ─────────────────────────────────────────────────────
 with tab_batch:
@@ -99,8 +109,11 @@ with tab_batch:
             c1.metric("Transactions", f"{len(scored):,}")
             c2.metric("Flagged", f"{len(flagged):,}")
             c3.metric("Flag rate", f"{len(flagged) / len(scored) * 100:.2f} %")
-            columns = ["expected_loss", "fraud_proba", "Amount", "Time"]
-            st.dataframe(flagged[columns].head(200), width="stretch")
+            top = flagged.head(200).copy()  # reasons for the 200 riskiest alerts
+            if len(top):
+                top["reasons"] = [format_reasons(r) for r in reason_codes(model, top, spec)]
+            columns = ["expected_loss", "fraud_proba", "Amount", "reasons"]
+            st.dataframe(top.reindex(columns=columns), width="stretch")
             st.download_button("Download scored CSV", scored.to_csv(index=False).encode(),
                                "scored_transactions.csv", "text/csv")
 

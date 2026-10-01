@@ -36,6 +36,18 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     return out[FEATURES]
 
 
+REASON_GROUPS = {**{v: v for v in V_COLS}, "Amount_log": "amount",
+                 "Hour_sin": "time_of_day", "Hour_cos": "time_of_day"}
+
+
+def describe(group: str, raw: pd.Series, feats: pd.Series) -> str:
+    if group == "amount":
+        return f"Amount {raw['Amount']:,.2f}"
+    if group == "time_of_day":
+        return f"Hour {int(raw['Time'] // 3600 % 24)} of the daily cycle (clock time is not in the data)"
+    return f"Anonymised component {group} = {raw[group]:.2f}"
+
+
 def synthetic(n: int = 3000, fraud_rate: float = 0.03, seed: int = 0) -> pd.DataFrame:
     """Random transactions in this schema; frauds have shifted V1/V2 so a model can learn them."""
     rng = np.random.default_rng(seed)
@@ -56,4 +68,6 @@ SPEC = DatasetSpec(
     load=load,
     add_features=add_features,
     synthetic=synthetic,
+    reason_groups=REASON_GROUPS,
+    describe=describe,
 )

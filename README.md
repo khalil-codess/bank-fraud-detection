@@ -79,6 +79,22 @@ loss is smaller than the cost of reviewing them, and reviews large purchases eve
 From the first to the last column, analysts get a third fewer alerts, and two thirds of them are
 real frauds instead of four in ten.
 
+### Reason codes
+
+Every alert comes with its top three reasons in plain language, built from the transaction's own
+values (`src/fraud/reasons.py`). A real fraud from the test period:
+
+> **Send for review**, fraud probability 100%, expected loss 1,104.39 USD
+> 1. Amount 1,104.51 USD
+> 2. Card spent 865.02 USD in the previous 24 h
+> 3. Amount is 14.1x this card's average (78.44 USD)
+
+SHAP contributions of related features are summed into reason groups (the two time-of-day
+features become "Made at 22:45 (night)", the 14 category columns become "Merchant category:
+groceries (in store)"). Because SHAP is additive, the groups plus the base value equal the
+model's score exactly, and a test checks it. The dashboard shows the reasons for single
+transactions and adds a `reasons` column when scoring a CSV.
+
 ### All models (card history, tuned)
 
 **Time-series cross-validation (4 folds, mean ± std)**
@@ -183,6 +199,7 @@ src/fraud/
   validation.py  rolling time-series cross-validation
   calibration.py Platt calibration, reliability and calibration error
   tune.py        Optuna hyper-parameter search inside the training window
+  reasons.py     plain-language reason codes from SHAP
   inference.py   load artifacts, score and explain transactions
   plots.py       figures written to outputs/
   synthetic.py   CLI writing synthetic data in a dataset's file format
@@ -241,7 +258,7 @@ python -m fraud.train --config configs/sparkov.yaml --data data/synthetic.csv
 4. ~~Multi-dataset support + Sparkov dataset~~
 5. ~~Behavioural features (velocity, card history, geography)~~
 6. ~~LightGBM, Optuna tuning, probability calibration, expected-value decision rule~~
-7. Readable reason codes
+7. ~~Readable reason codes~~
 8. FastAPI scoring service + Docker, MLflow tracking, drift monitoring
 
 Joblib model files execute code when loaded: only load models you trained yourself.
