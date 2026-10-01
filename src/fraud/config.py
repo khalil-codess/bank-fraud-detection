@@ -10,10 +10,11 @@ import yaml
 
 @dataclass(frozen=True)
 class Config:
+    dataset: str = "creditcard"         # see fraud.datasets
     seed: int = 42
     data_path: Path = Path("data/raw/creditcard.csv")
-    artifacts_dir: Path = Path("artifacts")
-    outputs_dir: Path = Path("outputs")
+    artifacts_dir: Path = Path("artifacts/creditcard")
+    outputs_dir: Path = Path("outputs/creditcard")
     val_frac: float = 0.15
     test_frac: float = 0.15
     threshold_method: str = "cost"          # "cost" (maximise savings) or "fbeta"
@@ -28,6 +29,9 @@ class Config:
     models: dict = field(default_factory=dict)
 
     def __post_init__(self):
+        from fraud.datasets import get_dataset
+
+        get_dataset(self.dataset)  # raises on an unknown name
         if self.threshold_method not in ("cost", "fbeta"):
             raise ValueError(f"threshold.method must be 'cost' or 'fbeta', not {self.threshold_method!r}")
 
@@ -36,17 +40,19 @@ class Config:
         return replace(self, **{k: v for k, v in overrides.items() if v is not None})
 
 
-def load_config(path: str | Path = "config.yaml") -> Config:
+def load_config(path: str | Path = "configs/sparkov.yaml") -> Config:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     paths, split = raw.get("paths", {}), raw.get("split", {})
     threshold, ev = raw.get("threshold", {}), raw.get("evaluation", {})
     explain = raw.get("explain", {})
     d = Config()
+    dataset = raw.get("dataset", d.dataset)
     return Config(
+        dataset=dataset,
         seed=raw.get("seed", d.seed),
         data_path=Path(paths.get("data", d.data_path)),
-        artifacts_dir=Path(paths.get("artifacts", d.artifacts_dir)),
-        outputs_dir=Path(paths.get("outputs", d.outputs_dir)),
+        artifacts_dir=Path(paths.get("artifacts", f"artifacts/{dataset}")),
+        outputs_dir=Path(paths.get("outputs", f"outputs/{dataset}")),
         val_frac=split.get("val_frac", d.val_frac),
         test_frac=split.get("test_frac", d.test_frac),
         threshold_method=threshold.get("method", d.threshold_method),

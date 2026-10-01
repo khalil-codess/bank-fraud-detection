@@ -1,12 +1,13 @@
 import pytest
+from conftest import config_for
 
 from fraud.config import Config
-from fraud.synthetic import make_synthetic
+from fraud.datasets import creditcard
 from fraud.validation import cross_validate, rolling_folds
 
 
 def test_folds_are_chronological_and_never_look_ahead():
-    df = make_synthetic(n=2000)
+    df = creditcard.synthetic(n=2000)
     folds = list(rolling_folds(df, n_folds=4, fold_frac=0.1))
     assert len(folds) == 4
     for fit, calib, test in folds:
@@ -23,16 +24,22 @@ def test_folds_are_chronological_and_never_look_ahead():
 
 def test_too_many_folds_is_rejected():
     with pytest.raises(ValueError):
-        list(rolling_folds(make_synthetic(n=100), n_folds=10, fold_frac=0.1))
+        list(rolling_folds(creditcard.synthetic(n=100), n_folds=10, fold_frac=0.1))
 
 
-def test_cross_validate_summaries(model_params):
-    cfg = Config(cv_folds=2, cv_fold_frac=0.2, models={"XGBoost": model_params["XGBoost"]})
-    cv = cross_validate(make_synthetic(n=3000), cfg)
+def test_cross_validate_summaries(spec):
+    params = config_for(spec.name).models["XGBoost"]
+    cfg = Config(dataset=spec.name, cv_folds=2, cv_fold_frac=0.2, models={"XGBoost": params})
+    cv = cross_validate(spec.synthetic(n=3000), cfg)
     assert len(cv["XGBoost"]["folds"]) == 2
     for metric in ("pr_auc", "savings_rate", "recall"):
         assert set(cv["XGBoost"][metric]) == {"mean", "std"}
     assert cv["XGBoost"]["pr_auc"]["mean"] > 0.8
+
+
+def test_unknown_dataset_in_config_is_rejected():
+    with pytest.raises(ValueError, match="Unknown dataset"):
+        Config(dataset="nope")
 
 
 def test_invalid_threshold_method_is_rejected():

@@ -1,6 +1,7 @@
 {
-  "created": "2026-10-01T13:00:45+00:00",
-  "version": "0.3.0",
+  "created": "2026-10-01T13:19:53+00:00",
+  "version": "0.4.0",
+  "dataset": "creditcard",
   "selected_model": "XGBoost",
   "selected_by": "cv mean savings_rate",
   "threshold": 0.723568856716156,

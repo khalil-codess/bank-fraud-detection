@@ -1,6 +1,6 @@
 """Train, compare and save fraud models.
 
-Usage: python -m fraud.train [--config config.yaml] [--data PATH] [--no-cv] [--no-shap]
+Usage: python -m fraud.train [--config configs/sparkov.yaml] [--data PATH] [--no-cv] [--no-shap]
 
 Method:
   - exact duplicate rows are removed
@@ -26,8 +26,8 @@ import pandas as pd
 from fraud import __version__, plots
 from fraud.config import Config, load_config
 from fraud.data import load_transactions, time_split
+from fraud.datasets import get_dataset
 from fraud.evaluate import at_k, bootstrap_ci, evaluate, paired_bootstrap
-from fraud.features import FEATURES, RAW_COLS, add_features
 from fraud.models import TREE_MODELS, build_models
 from fraud.validation import cross_validate, pick_threshold
 
@@ -39,7 +39,8 @@ def run(cfg: Config) -> dict:
     cfg.artifacts_dir.mkdir(parents=True, exist_ok=True)
     cfg.outputs_dir.mkdir(parents=True, exist_ok=True)
 
-    df = load_transactions(cfg.data_path)
+    spec = get_dataset(cfg.dataset)
+    df = load_transactions(spec, cfg.data_path)
     plots.plot_eda(df, cfg.outputs_dir / "eda_distribution.png")
     train, val, test = time_split(df, cfg.val_frac, cfg.test_frac)
     for name, part in (("train", train), ("val", val), ("test", test)):
@@ -51,11 +52,11 @@ def run(cfg: Config) -> dict:
         _log_cv(cv, cfg.selection_metric)
 
     # ── 2. Fit every model on train, threshold on validation, score test ─────
-    X_train, y_train = add_features(train), train["Class"]
-    X_val, y_val = add_features(val), val["Class"]
-    X_test, y_test = add_features(test), test["Class"]
+    X_train, y_train = spec.add_features(train), train["Class"]
+    X_val, y_val = spec.add_features(val), val["Class"]
+    X_test, y_test = spec.add_features(test), test["Class"]
 
-    models = build_models(y_train, cfg.models, seed=cfg.seed)
+    models = build_models(y_train, cfg.models, spec.scale_cols, seed=cfg.seed)
     report, test_probas = {}, {}
     for name, model in models.items():
         log.info("Training %s on the full training window", name)
@@ -97,26 +98,27 @@ def run(cfg: Config) -> dict:
         plots.plot_cv(cv, cfg.outputs_dir / "cv_results.png")
     if cfg.shap and isinstance(best_model.named_steps["clf"], TREE_MODELS):
         log.info("Computing SHAP explanations")
-        plots.plot_shap(best_model, test, cfg.outputs_dir, cfg.shap_sample, cfg.seed)
+        plots.plot_shap(best_model, test, spec, cfg.outputs_dir, cfg.shap_sample, cfg.seed)
 
     # ── 5. Artifacts ────────────────────────────────────────────────────────
     joblib.dump(best_model, cfg.artifacts_dir / "fraud_model.joblib")
     # Real test transactions for the dashboard demo: every fraud + up to 300 legitimate ones
     legit = test[test["Class"] == 0]
     demo = pd.concat([test[test["Class"] == 1], legit.sample(min(300, len(legit)), random_state=0)])
-    demo[RAW_COLS + ["Class"]].sort_values("Time").to_csv(
+    demo[spec.raw_cols + ["Class"]].sort_values("Time").to_csv(
         cfg.artifacts_dir / "demo_transactions.csv", index=False)
 
     metrics = {
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "version": __version__,
+        "dataset": cfg.dataset,
         "selected_model": best,
         "selected_by": selected_by,
         "threshold": threshold,
         "threshold_method": cfg.threshold_method,
         "beta": cfg.beta,
         "review_cost": cfg.review_cost,
-        "features": FEATURES,
+        "features": spec.features,
         "data": {
             "rows_raw": df.attrs["rows_raw"], "rows_dedup": len(df),
             **{name: {"rows": len(part), "frauds": int(part["Class"].sum())}
@@ -162,7 +164,7 @@ def _log_summary(report: dict, best: str, budgets: dict, comparisons: dict) -> N
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
-    ap.add_argument("--config", default="config.yaml")
+    ap.add_argument("--config", default="configs/sparkov.yaml")
     ap.add_argument("--data", type=Path, help="override paths.data")
     ap.add_argument("--artifacts", type=Path, help="override paths.artifacts")
     ap.add_argument("--outputs", type=Path, help="override paths.outputs")

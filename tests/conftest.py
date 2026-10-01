@@ -1,21 +1,24 @@
 import pytest
 
 from fraud.config import load_config
-from fraud.data import time_split
-from fraud.synthetic import make_synthetic
+from fraud.datasets import DATASETS, get_dataset
 
 
-@pytest.fixture
-def synthetic_df():
-    return make_synthetic()
+def config_for(name: str):
+    """The real config file of a dataset, so tests cover what training uses."""
+    return load_config(f"configs/{name}.yaml")
+
+
+@pytest.fixture(params=DATASETS)
+def spec(request):
+    return get_dataset(request.param)
+
+
+@pytest.fixture(scope="module", params=DATASETS)
+def module_spec(request):
+    return get_dataset(request.param)
 
 
 @pytest.fixture(scope="module")
-def splits():
-    return time_split(make_synthetic())
-
-
-@pytest.fixture(scope="module")
-def model_params():
-    """Model settings from the real config.yaml, so tests cover what training uses."""
-    return load_config("config.yaml").models
+def module_config(module_spec):
+    return config_for(module_spec.name)

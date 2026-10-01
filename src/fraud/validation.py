@@ -17,8 +17,8 @@ import logging
 import numpy as np
 import pandas as pd
 
+from fraud.datasets import get_dataset
 from fraud.evaluate import evaluate, select_threshold, select_threshold_by_cost
-from fraud.features import add_features
 from fraud.models import build_models
 
 log = logging.getLogger(__name__)
@@ -47,6 +47,7 @@ def pick_threshold(y, proba, amount, cfg) -> float:
 
 def cross_validate(df: pd.DataFrame, cfg) -> dict:
     """Per-model fold metrics plus mean/std summaries. `df` must exclude the final test set."""
+    spec = get_dataset(cfg.dataset)
     folds_out: dict[str, list] = {name: [] for name in cfg.models}
     for i, (fit, calib, test) in enumerate(rolling_folds(df, cfg.cv_folds, cfg.cv_fold_frac), 1):
         if min(fit["Class"].sum(), calib["Class"].sum(), test["Class"].sum()) == 0:
@@ -54,12 +55,13 @@ def cross_validate(df: pd.DataFrame, cfg) -> dict:
             continue
         log.info("CV fold %d/%d: fit %s, calib %s, test %s rows (%d frauds)", i, cfg.cv_folds,
                  f"{len(fit):,}", f"{len(calib):,}", f"{len(test):,}", int(test["Class"].sum()))
-        models = build_models(fit["Class"], cfg.models, seed=cfg.seed)
+        X_fit, X_calib, X_test = (spec.add_features(part) for part in (fit, calib, test))
+        models = build_models(fit["Class"], cfg.models, spec.scale_cols, seed=cfg.seed)
         for name, model in models.items():
-            model.fit(add_features(fit), fit["Class"])
-            p_calib = model.predict_proba(add_features(calib))[:, 1]
+            model.fit(X_fit, fit["Class"])
+            p_calib = model.predict_proba(X_calib)[:, 1]
             thr = pick_threshold(calib["Class"], p_calib, calib["Amount"], cfg)
-            p_test = model.predict_proba(add_features(test))[:, 1]
+            p_test = model.predict_proba(X_test)[:, 1]
             folds_out[name].append(evaluate(test["Class"], p_test, thr, test["Amount"], cfg.review_cost))
 
     return {name: _summarise(folds) for name, folds in folds_out.items()}

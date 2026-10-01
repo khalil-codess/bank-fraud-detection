@@ -7,20 +7,17 @@ from pathlib import Path
 
 import pandas as pd
 
-from fraud.features import RAW_COLS
+from fraud.datasets import DatasetSpec
 
 log = logging.getLogger(__name__)
 
 
-def load_transactions(path: str | Path) -> pd.DataFrame:
-    """Load the Kaggle credit-card CSV and drop exact duplicate rows."""
-    df = pd.read_csv(path)
-    missing = [c for c in RAW_COLS + ["Class"] if c not in df.columns]
-    if missing:
-        raise ValueError(f"{path} is missing columns: {missing}")
+def load_transactions(spec: DatasetSpec, path: str | Path) -> pd.DataFrame:
+    """Load a dataset into its canonical frame and drop exact duplicate rows."""
+    df = spec.load(Path(path))
     n_raw = len(df)
     df = df.drop_duplicates().reset_index(drop=True)
-    log.info("Loaded %s rows (%s after removing duplicates), %s frauds (%.3f%%)",
+    log.info("Loaded %s: %s rows (%s after removing duplicates), %s frauds (%.3f%%)", spec.name,
              f"{n_raw:,}", f"{len(df):,}", int(df["Class"].sum()), df["Class"].mean() * 100)
     df.attrs["rows_raw"] = n_raw
     return df

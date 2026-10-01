@@ -22,8 +22,10 @@ jobs:
         run: ruff check src tests app.py
       - name: Tests
         run: pytest --cov --cov-report=term-missing
-      - name: Smoke training on synthetic data
+      - name: Smoke training on synthetic data (every dataset)
         run: |
-          python -m fraud.synthetic --rows 5000 --out /tmp/synthetic.csv
-          python -m fraud.train --data /tmp/synthetic.csv --artifacts /tmp/artifacts --outputs /tmp/outputs
-          test -f /tmp/artifacts/fraud_model.joblib
+          for ds in creditcard sparkov; do
+            python -m fraud.synthetic --dataset $ds --rows 5000 --out /tmp/$ds.csv
+            python -m fraud.train --config configs/$ds.yaml --data /tmp/$ds.csv               --artifacts /tmp/artifacts/$ds --outputs /tmp/outputs/$ds
+            test -f /tmp/artifacts/$ds/fraud_model.joblib
+          done

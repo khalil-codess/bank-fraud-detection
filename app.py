@@ -1,5 +1,6 @@
 """Streamlit dashboard. Run: streamlit run app.py (after python -m fraud.train)."""
 
+import tempfile
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -7,25 +8,27 @@ import pandas as pd
 import shap
 import streamlit as st
 
-from fraud.features import RAW_COLS
 from fraud.inference import explain, load_artifacts, score_transactions
-
-ART, OUT = Path("artifacts"), Path("outputs")
 
 st.set_page_config(page_title="Bank Fraud Detector", page_icon="🔍", layout="wide")
 
+trained = sorted(p.parent.name for p in Path("artifacts").glob("*/fraud_model.joblib"))
+if not trained:
+    st.error("No trained model found. Train first: `python -m fraud.train --config configs/sparkov.yaml`.")
+    st.stop()
+default = trained.index("sparkov") if "sparkov" in trained else 0
+dataset = st.sidebar.selectbox("Dataset", trained, index=default)
+ART, OUT = Path("artifacts") / dataset, Path("outputs") / dataset
+
 
 @st.cache_resource
-def load():
-    model, metrics = load_artifacts(ART)
-    return model, metrics, pd.read_csv(ART / "demo_transactions.csv")
+def load(art: Path):
+    model, metrics, spec = load_artifacts(art)
+    return model, metrics, spec, pd.read_csv(art / "demo_transactions.csv")
 
 
-try:
-    model, metrics, demo = load()
-except FileNotFoundError:
-    st.error("Model artifacts not found. Train first with `python -m fraud.train`.")
-    st.stop()
+model, metrics, spec, demo = load(ART)
+st.sidebar.caption(spec.description)
 
 threshold = metrics["threshold"]
 test_m = metrics["models"][metrics["selected_model"]]["test"]
@@ -45,13 +48,14 @@ with tab_demo:
         idx = int(st.number_input(f"Example (0–{len(pool) - 1})", 0, len(pool) - 1, 0))
         tx = pool.iloc[[idx]].copy()
 
-        st.markdown("**What-if on the readable fields**")
+        st.markdown("**What-if**")
         tx["Amount"] = st.number_input("Amount", 0.0, 30000.0, float(tx["Amount"].iloc[0]), step=10.0)
-        tx["Time"] = st.slider("Time (seconds since first transaction)", 0, 172800, int(tx["Time"].iloc[0]))
-        st.caption("V1–V28 are anonymised PCA components and are kept as recorded.")
+        pca_cols = [c for c in tx.columns if c.startswith("V") and c[1:].isdigit()]  # anonymous, not shown
+        details = tx.drop(columns=pca_cols + ["Class"])
+        st.dataframe(details.T.rename(columns=lambda _: "value").astype(str), width="stretch")
 
     with col_out:
-        res = score_transactions(model, threshold, tx).iloc[0]
+        res = score_transactions(model, threshold, tx, spec).iloc[0]
         if res["is_fraud"]:
             st.error("🚨 Flagged as FRAUD")
         else:
@@ -63,21 +67,26 @@ with tab_demo:
         st.subheader("Why this score?")
         st.caption("Red pushes towards fraud, blue towards legitimate.")
         fig = plt.figure()
-        shap.waterfall_plot(explain(model, tx)[0], max_display=12, show=False)
+        shap.waterfall_plot(explain(model, tx, spec)[0], max_display=12, show=False)
         st.pyplot(fig)
         plt.close(fig)
 
 # ── Tab 2: batch scoring ─────────────────────────────────────────────────────
 with tab_batch:
-    st.markdown("Upload a CSV in the Kaggle format (columns V1 … V28, Time, Amount).")
+    st.markdown(f"Upload a CSV in the original Kaggle format of the **{dataset}** dataset.")
     up = st.file_uploader("CSV file", type="csv")
     if up is not None:
-        raw = pd.read_csv(up)
-        missing = [c for c in RAW_COLS if c not in raw.columns]
-        if missing:
-            st.error(f"Missing columns: {', '.join(missing)}")
+        with tempfile.TemporaryDirectory() as tmp:  # reuse the training loader: same parsing and checks
+            path = Path(tmp) / "upload.csv"
+            path.write_bytes(up.getvalue())
+            try:
+                raw, error = spec.load(path), None
+            except (ValueError, KeyError) as exc:
+                raw, error = None, str(exc)
+        if error:
+            st.error(error)
         else:
-            scored = pd.concat([raw, score_transactions(model, threshold, raw)], axis=1)
+            scored = pd.concat([raw, score_transactions(model, threshold, raw, spec)], axis=1)
             flagged = scored[scored["is_fraud"]].sort_values("fraud_proba", ascending=False)
             c1, c2, c3 = st.columns(3)
             c1.metric("Transactions", f"{len(scored):,}")

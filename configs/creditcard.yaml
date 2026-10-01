@@ -1,10 +1,11 @@
-# Training configuration. CLI flags of `python -m fraud.train` override these values.
+# Kaggle ULB credit-card dataset. CLI flags of `python -m fraud.train` override these values.
+dataset: creditcard
 seed: 42
 
 paths:
   data: data/raw/creditcard.csv
-  artifacts: artifacts
-  outputs: outputs
+  artifacts: artifacts/creditcard
+  outputs: outputs/creditcard
 
 split:            # chronological: train | validation | test
   val_frac: 0.15

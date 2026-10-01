@@ -26,16 +26,18 @@ def _save(fig, path: Path) -> None:
 def plot_eda(df, path: Path) -> None:
     fig, axes = plt.subplots(1, 3, figsize=(16, 4))
     counts = df["Class"].value_counts().sort_index()
+    long_span = df["Time"].max() - df["Time"].min() > 7 * 86_400
+    time_unit, time_label = (86_400, "Days") if long_span else (3600, "Hours")
     axes[0].pie(counts, labels=[LABELS[c] for c in counts.index], autopct="%1.2f%%",
                 colors=[COLORS[c] for c in counts.index], startangle=90)
     axes[0].set_title("Class distribution")
     for cls in (0, 1):
         sub = df[df["Class"] == cls]
         axes[1].hist(sub["Amount"], bins=50, alpha=0.7, label=LABELS[cls], color=COLORS[cls])
-        axes[2].hist(sub["Time"] / 3600, bins=48, alpha=0.7, label=LABELS[cls],
+        axes[2].hist(sub["Time"] / time_unit, bins=48, alpha=0.7, label=LABELS[cls],
                      color=COLORS[cls], density=True)
     axes[1].set(yscale="log", title="Transaction amount", xlabel="Amount")
-    axes[2].set(title="Time of transaction (density)", xlabel="Hours since first transaction")
+    axes[2].set(title="Time of transaction (density)", xlabel=f"{time_label} since dataset start")
     axes[1].legend()
     axes[2].legend()
     fig.tight_layout()
@@ -98,13 +100,13 @@ def plot_cv(cv: dict, path: Path) -> None:
     _save(fig, path)
 
 
-def plot_shap(model, test_df, out_dir: Path, sample_size: int = 500, seed: int = 0) -> None:
+def plot_shap(model, test_df, spec, out_dir: Path, sample_size: int = 500, seed: int = 0) -> None:
     """Global SHAP summary plus the explanation of one real fraud from the test set."""
     import shap
 
     sample = test_df.sample(n=min(sample_size, len(test_df)), random_state=seed)
     plt.figure()
-    shap.summary_plot(explain(model, sample), show=False, plot_size=(10, 8))
+    shap.summary_plot(explain(model, sample, spec), show=False, plot_size=(10, 8))
     plt.title("SHAP: feature impact on the fraud score")
     plt.tight_layout()
     _save(plt.gcf(), out_dir / "shap_summary.png")
@@ -112,6 +114,6 @@ def plot_shap(model, test_df, out_dir: Path, sample_size: int = 500, seed: int =
     frauds = test_df[test_df["Class"] == 1]
     if len(frauds):
         plt.figure()
-        shap.waterfall_plot(explain(model, frauds.iloc[[0]])[0], show=False, max_display=12)
+        shap.waterfall_plot(explain(model, frauds.iloc[[0]], spec)[0], show=False, max_display=12)
         plt.tight_layout()
         _save(plt.gcf(), out_dir / "shap_waterfall_fraud.png")

@@ -14,35 +14,35 @@ from xgboost import XGBClassifier
 TREE_MODELS = (RandomForestClassifier, XGBClassifier)
 
 
-def make_preprocessor() -> ColumnTransformer:
-    """Standardise log(amount); the scaler is fitted on the training data only."""
+def make_preprocessor(scale_cols: list[str]) -> ColumnTransformer:
+    """Standardise numeric features; the scaler is fitted on the training data only."""
     return ColumnTransformer(
-        [("amount", StandardScaler(), ["Amount_log"])],
+        [("scale", StandardScaler(), list(scale_cols))],
         remainder="passthrough",
         verbose_feature_names_out=False,
     ).set_output(transform="pandas")
 
 
-def build_models(y_train, params: dict, seed: int = 42) -> dict:
-    """Build the pipelines named in `params` (the `models` section of config.yaml)."""
+def build_models(y_train, params: dict, scale_cols: list[str], seed: int = 42) -> dict:
+    """Build the pipelines named in `params` (the `models` section of the config)."""
     pos_weight = (y_train == 0).sum() / max((y_train == 1).sum(), 1)
     builders = {
         "Logistic Regression": lambda p: Pipeline([
-            ("prep", make_preprocessor()),
+            ("prep", make_preprocessor(scale_cols)),
             ("clf", LogisticRegression(class_weight="balanced", random_state=seed, **p)),
         ]),
         "Random Forest": lambda p: Pipeline([
-            ("prep", make_preprocessor()),
+            ("prep", make_preprocessor(scale_cols)),
             ("clf", RandomForestClassifier(class_weight="balanced_subsample",
                                            random_state=seed, n_jobs=-1, **p)),
         ]),
         "XGBoost": lambda p: Pipeline([
-            ("prep", make_preprocessor()),
+            ("prep", make_preprocessor(scale_cols)),
             ("clf", _xgb(seed, scale_pos_weight=pos_weight, **p)),
         ]),
         # Ablation: SMOTE resamples the training data only (imblearn skips it at predict time)
         "XGBoost + SMOTE": lambda p: ImbPipeline([
-            ("prep", make_preprocessor()),
+            ("prep", make_preprocessor(scale_cols)),
             ("smote", SMOTE(sampling_strategy=p.pop("smote_ratio", 0.1), random_state=seed)),
             ("clf", _xgb(seed, **p)),
         ]),
