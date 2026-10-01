@@ -1,5 +1,6 @@
 {
-  "created": "2026-10-01T12:12:17+00:00",
+  "created": "2026-10-01T12:34:00+00:00",
+  "version": "0.2.0",
   "selected_model": "Random Forest",
   "threshold": 0.36488558937821985,
   "beta": 1.0,

@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install
+        run: pip install -e ".[app,dev]"
+      - name: Lint
+        run: ruff check src tests app.py
+      - name: Tests
+        run: pytest --cov --cov-report=term-missing
+      - name: Smoke training on synthetic data
+        run: |
+          python -m fraud.synthetic --rows 5000 --out /tmp/synthetic.csv
+          python -m fraud.train --data /tmp/synthetic.csv --artifacts /tmp/artifacts --outputs /tmp/outputs
+          test -f /tmp/artifacts/fraud_model.joblib

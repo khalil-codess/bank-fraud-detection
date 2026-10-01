@@ -1,0 +1,38 @@
+# Training configuration. CLI flags of `python -m fraud.train` override these values.
+seed: 42
+
+paths:
+  data: data/raw/creditcard.csv
+  artifacts: artifacts
+  outputs: outputs
+
+split:            # chronological: train | validation | test
+  val_frac: 0.15
+  test_frac: 0.15
+
+threshold:
+  beta: 1.0       # F-beta maximised on validation; >1 favours recall
+
+explain:
+  shap: true
+  sample_size: 500
+
+models:
+  Logistic Regression:
+    max_iter: 2000
+  Random Forest:
+    n_estimators: 200
+    min_samples_leaf: 3
+  XGBoost:
+    n_estimators: 300
+    learning_rate: 0.05
+    max_depth: 4
+    subsample: 0.8
+    colsample_bytree: 0.8
+  XGBoost + SMOTE:
+    smote_ratio: 0.1   # minority/majority ratio after oversampling (train only)
+    n_estimators: 300
+    learning_rate: 0.05
+    max_depth: 4
+    subsample: 0.8
+    colsample_bytree: 0.8

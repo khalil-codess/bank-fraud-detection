@@ -1,10 +1,2 @@
-# Versions testées (Python 3.13). Les bornes basses sont des minimums, pas des garanties.
-pandas>=2.0
-numpy>=1.26
-matplotlib>=3.8
-scikit-learn>=1.4
-xgboost>=2.0
-imbalanced-learn>=0.12
-shap>=0.45
-streamlit>=1.35
-joblib>=1.3
+# Streamlit Community Cloud installs from this file; the real dependency list is in pyproject.toml.
+.[app]
