@@ -8,6 +8,11 @@ same additions in the same order), and a test checks exact equality on a replaye
 Per card it keeps: transaction count, running sums (raw, and centred on the card's first amount),
 timestamps and running sums of the last 7 days (for the 1 h / 24 h / 7 d windows), merchant and
 category counts, and the previous purchase's time and location.
+
+Squares are written x * x, never x ** 2: Python's ** calls the C library's pow(), which is not
+guaranteed to round like a multiplication (on Linux it differed in the last bit), and NumPy's
+array square is a multiplication. Every other operation used (+, -, *, /, sqrt) is correctly
+rounded by IEEE 754, so both paths give identical results on every platform.
 """
 
 from __future__ import annotations
@@ -66,7 +71,8 @@ class CardHistoryStore:
         # Same arithmetic as the batch path: "before" = inclusive running sum - current amount.
         before = (card.inclusive + amount) - amount
         before_c = (card.inclusive_c + (amount - card.ref)) - (amount - card.ref)
-        before_sq = (card.inclusive_sq + (amount - card.ref) ** 2) - (amount - card.ref) ** 2
+        d = amount - card.ref
+        before_sq = (card.inclusive_sq + d * d) - d * d
         n = card.n
         out = {}
         for name, seconds in WINDOWS.items():
@@ -76,7 +82,7 @@ class CardHistoryStore:
                 window_before = card.befores[start] if start < len(card.befores) else before
                 out["hist_amount_24h"] = before - window_before
         mean_c = before_c / n
-        var = (before_sq - n * mean_c**2) / (n - 1) if n > 1 else math.nan
+        var = (before_sq - n * (mean_c * mean_c)) / (n - 1) if n > 1 else math.nan
         out.update({
             "hist_n": n,
             "hist_mean": mean_c + card.ref,
@@ -100,7 +106,7 @@ class CardHistoryStore:
         before = (card.inclusive + amount) - amount
         card.inclusive += amount
         card.inclusive_c += amount - card.ref
-        card.inclusive_sq += (amount - card.ref) ** 2
+        card.inclusive_sq += (amount - card.ref) * (amount - card.ref)
         card.times.append(t)
         card.befores.append(before)
         cut = bisect.bisect_left(card.times, t - _KEEP)

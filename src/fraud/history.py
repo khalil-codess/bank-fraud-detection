@@ -54,7 +54,7 @@ def card_history(df: pd.DataFrame) -> pd.DataFrame:
     shifted = amount - ref
     before = _exclusive_cumsum(amount, card)            # sum of the card's earlier amounts
     before_c = _exclusive_cumsum(shifted, card)
-    before_sq = _exclusive_cumsum(shifted**2, card)
+    before_sq = _exclusive_cumsum(shifted * shifted, card)  # x * x, not ** 2: see state.py
 
     out = {}
     for name, seconds in WINDOWS.items():
@@ -65,7 +65,7 @@ def card_history(df: pd.DataFrame) -> pd.DataFrame:
 
     with np.errstate(invalid="ignore", divide="ignore"):
         mean_c = np.where(prior_n > 0, before_c / prior_n, np.nan)
-        var = np.where(prior_n > 1, (before_sq - prior_n * mean_c**2) / (prior_n - 1), np.nan)
+        var = np.where(prior_n > 1, (before_sq - prior_n * (mean_c * mean_c)) / (prior_n - 1), np.nan)
     out["hist_n"] = prior_n
     out["hist_mean"] = mean_c + ref
     out["hist_std"] = np.sqrt(np.clip(var, 0, None))
